@@ -1,0 +1,34 @@
+:root {
+  color: #1f2937;
+  font-family: system-ui, sans-serif;
+  background: #f3f4f6;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 720px;
+  min-height: 100vh;
+  padding: 4rem 1.5rem;
+}
+
+h1 {
+  margin-bottom: 1rem;
+}
+
+.available,
+.unavailable {
+  font-weight: 600;
+}
+
+.available {
+  color: #047857;
+}
+
+.unavailable {
+  color: #b91c1c;
+}

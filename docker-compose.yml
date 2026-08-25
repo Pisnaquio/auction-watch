@@ -1,0 +1,21 @@
+services:
+  auction-watch:
+    build: .
+    ports:
+      - "8789:8789"
+    environment:
+      AW_DATA_DIR: /data
+      AW_HOST: 0.0.0.0
+      AW_PORT: 8789
+      AW_LOG_LEVEL: INFO
+      AW_ENVIRONMENT: production
+    volumes:
+      - auction-watch-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8789/api/v1/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  auction-watch-data:
