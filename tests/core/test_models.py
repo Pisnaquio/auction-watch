@@ -19,7 +19,7 @@ def make_lot(**overrides: object) -> AuctionLot:
         "description": "Edición cuidada de colección",
         "category": "Música",
         "price_value": Decimal("960.10"),
-        "price_currency": "uyu",
+        "price_currency": "UYU",
         "price_label": "$ 960,10",
         "closing_at": OBSERVED_AT,
         "lot_url": "https://example.test/lots/12",
@@ -45,7 +45,7 @@ def make_profile(**overrides: object) -> SearchProfile:
 
 def test_auction_group_and_lot_serialize_normalized_contracts() -> None:
     group = AuctionGroup(
-        source_id=" REMATES ",
+        source_id="remates",
         auction_id="7691",
         title="Remate de agosto",
         url="https://example.test/auctions/7691",
@@ -59,7 +59,7 @@ def test_auction_group_and_lot_serialize_normalized_contracts() -> None:
     assert group.source_id == "remates"
     assert lot.price_currency == "UYU"
     assert lot.model_dump()["price_value"] == Decimal("960.10")
-    assert lot.opportunity_key == "remates:7691:12"
+    assert lot.opportunity_key == "aw1:remates:7691:12"
     assert lot.model_dump_json()
 
 
@@ -83,7 +83,7 @@ def test_ids_and_extra_fields_are_rejected() -> None:
 
 
 def test_price_filter_requires_positive_maximum_and_currency() -> None:
-    assert PriceFilter(maximum=Decimal("1000"), currency="uyu").currency == "UYU"
+    assert PriceFilter(maximum=Decimal("1000"), currency="UYU").currency == "UYU"
     with pytest.raises(ValidationError):
         PriceFilter(maximum=Decimal("0"), currency="UYU")
     with pytest.raises(ValidationError):

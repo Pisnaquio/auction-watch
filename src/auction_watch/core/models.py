@@ -1,9 +1,11 @@
-"""Normalized domain models shared by sources and the matcher."""
+"""Strict, immutable domain models shared by sources and the matcher."""
 
 from __future__ import annotations
 
-from decimal import Decimal
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -17,47 +19,124 @@ from pydantic import (
     model_validator,
 )
 
+from auction_watch.core.frozen import FrozenDict
+from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
 from auction_watch.core.normalization import dedupe_terms, normalize_term
 
+_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_CURRENCY = re.compile(r"[A-Z]{3}\Z")
+_SEARCH_FIELDS = frozenset({"title", "description", "category"})
+_VALID_REJECTIONS = frozenset(
+    {
+        "profile_disabled",
+        "source_not_selected",
+        "lot_inactive",
+        "excluded_term",
+        "missing_required_terms",
+        "no_positive_trigger",
+        "unknown_price",
+        "price_above_maximum",
+        "score_below_minimum",
+    }
+)
 
-def _required_id(value: str) -> str:
+__all__ = [
+    "AuctionGroup",
+    "AuctionLot",
+    "MatchResult",
+    "PriceFilter",
+    "SearchProfile",
+    "SearchSchedule",
+    "decode_opportunity_key",
+    "encode_opportunity_key",
+]
+
+
+def _nonempty_text(value: object, label: str) -> str:
     if not isinstance(value, str):
-        raise ValueError("identifier must be a string")
+        raise ValueError(f"{label} must be a string")
     cleaned = value.strip()
     if not cleaned:
-        raise ValueError("identifier must not be empty")
+        raise ValueError(f"{label} must not be empty")
     return cleaned
 
 
-def _source_id(value: str) -> str:
-    return _required_id(value).casefold()
+def _canonical_slug(value: object, label: str) -> str:
+    if not isinstance(value, str) or _SLUG.fullmatch(value) is None:
+        raise ValueError(f"{label} must be an ASCII lowercase slug")
+    return value
 
 
-def _currency(value: str | None) -> str | None:
-    if value is None:
+def _external_id(value: object, label: str) -> str:
+    cleaned = _nonempty_text(value, label)
+    if len(cleaned) > 256 or any(ord(char) < 32 for char in cleaned):
+        raise ValueError(f"{label} exceeds the supported identifier limit")
+    return cleaned
+
+
+def _http_url(value: object, label: str, *, optional: bool = False) -> str | None:
+    if value is None and optional:
         return None
     if not isinstance(value, str):
-        raise ValueError("currency must be a string")
+        raise ValueError(f"{label} must be an absolute HTTP or HTTPS URL")
     cleaned = value.strip()
-    if not cleaned:
+    if optional and not cleaned:
         return None
-    return cleaned.upper()
+    parsed = urlsplit(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{label} must be an absolute HTTP or HTTPS URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{label} must not contain credentials")
+    return cleaned
 
 
-def _reject_float(value: object) -> object:
-    if isinstance(value, float):
-        raise ValueError("decimal values must not be provided as float")
+def _currency(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or _CURRENCY.fullmatch(value) is None:
+        raise ValueError("currency must be exactly three ASCII uppercase letters")
     return value
+
+
+def _decimal_amount(value: object, label: str) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError(f"{label} must be a finite Decimal, not a float")
+    try:
+        amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"{label} must be a valid Decimal") from exc
+    if not amount.is_finite() or amount < 0:
+        raise ValueError(f"{label} must be finite and non-negative")
+    return amount
+
+
+def _ordered_strings(value: object, label: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, set)) or not isinstance(value, (list, tuple)):
+        raise ValueError(f"{label} must be a list or tuple")
+    if any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{label} values must be strings")
+    return tuple(value)
+
+
+def _dedupe_exact(values: list[str] | tuple[str, ...], label: str) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        canonical = _canonical_slug(value, label)
+        if canonical not in seen:
+            seen.add(canonical)
+            result.append(canonical)
+    return tuple(result)
 
 
 class DomainModel(BaseModel):
     """Base settings shared by immutable, strict domain models."""
 
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        str_strip_whitespace=True,
-    )
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
 
 class AuctionGroup(DomainModel):
@@ -65,16 +144,23 @@ class AuctionGroup(DomainModel):
     auction_id: str
     title: str
     url: str
-    category: str
+    category: str = ""
     active: StrictBool
-    closing_at: AwareDatetime | None
+    closing_at: AwareDatetime | None = None
     observed_at: AwareDatetime
 
-    _validate_source_id = field_validator("source_id", mode="before")(_source_id)
-    _validate_auction_id = field_validator("auction_id", mode="before")(_required_id)
-    _validate_title = field_validator("title", mode="before")(_required_id)
-    _validate_url = field_validator("url", mode="before")(_required_id)
-    _validate_category = field_validator("category", mode="before")(_required_id)
+    _validate_source_id = field_validator("source_id", mode="before")(
+        lambda value: _canonical_slug(value, "source_id")
+    )
+    _validate_auction_id = field_validator("auction_id", mode="before")(
+        lambda value: _external_id(value, "auction_id")
+    )
+    _validate_title = field_validator("title", mode="before")(
+        lambda value: _nonempty_text(value, "title")
+    )
+    _validate_url = field_validator("url", mode="before")(
+        lambda value: _http_url(value, "url")
+    )
 
 
 class AuctionLot(DomainModel):
@@ -82,33 +168,55 @@ class AuctionLot(DomainModel):
     auction_id: str
     lot_id: str
     title: str
-    description: str
-    category: str
-    price_value: Decimal | None
-    price_currency: str | None
-    price_label: str
-    closing_at: AwareDatetime | None
+    description: str = ""
+    category: str = ""
+    price_value: Decimal | None = None
+    price_currency: str | None = None
+    price_label: str = ""
+    closing_at: AwareDatetime | None = None
     lot_url: str
     auction_url: str
-    image_url: str | None
+    image_url: str | None = None
     active: StrictBool
     observed_at: AwareDatetime
 
-    _validate_source_id = field_validator("source_id", mode="before")(_source_id)
-    _validate_auction_id = field_validator("auction_id", mode="before")(_required_id)
-    _validate_lot_id = field_validator("lot_id", mode="before")(_required_id)
-    _validate_title = field_validator("title", mode="before")(_required_id)
-    _validate_category = field_validator("category", mode="before")(_required_id)
-    _validate_lot_url = field_validator("lot_url", mode="before")(_required_id)
-    _validate_auction_url = field_validator("auction_url", mode="before")(_required_id)
-    _validate_price_value = field_validator("price_value", mode="before")(_reject_float)
+    _validate_source_id = field_validator("source_id", mode="before")(
+        lambda value: _canonical_slug(value, "source_id")
+    )
+    _validate_auction_id = field_validator("auction_id", mode="before")(
+        lambda value: _external_id(value, "auction_id")
+    )
+    _validate_lot_id = field_validator("lot_id", mode="before")(
+        lambda value: _external_id(value, "lot_id")
+    )
+    _validate_title = field_validator("title", mode="before")(
+        lambda value: _nonempty_text(value, "title")
+    )
+    _validate_lot_url = field_validator("lot_url", mode="before")(
+        lambda value: _http_url(value, "lot_url")
+    )
+    _validate_auction_url = field_validator("auction_url", mode="before")(
+        lambda value: _http_url(value, "auction_url")
+    )
+    _validate_image_url = field_validator("image_url", mode="before")(
+        lambda value: _http_url(value, "image_url", optional=True)
+    )
+    _validate_price_value = field_validator("price_value", mode="before")(
+        lambda value: _decimal_amount(value, "price_value")
+    )
     _validate_price_currency = field_validator("price_currency", mode="before")(_currency)
+
+    @model_validator(mode="after")
+    def validate_price_pair(self) -> AuctionLot:
+        if (self.price_value is None) != (self.price_currency is None):
+            raise ValueError("price_value and price_currency must be provided together")
+        return self
 
     @property
     def opportunity_key(self) -> str:
-        """Return the stable source/auction/lot identity string."""
+        """Return the versioned reversible source/auction/lot identity."""
 
-        return f"{self.source_id}:{self.auction_id}:{self.lot_id}"
+        return encode_opportunity_key(self.source_id, self.auction_id, self.lot_id)
 
 
 class PriceFilter(DomainModel):
@@ -116,20 +224,22 @@ class PriceFilter(DomainModel):
     currency: str | None = None
     on_unknown: Literal["include", "exclude"] = "include"
 
-    _validate_maximum = field_validator("maximum", mode="before")(_reject_float)
+    _validate_maximum = field_validator("maximum", mode="before")(
+        lambda value: _decimal_amount(value, "maximum")
+    )
     _validate_currency = field_validator("currency", mode="before")(_currency)
 
     @field_validator("maximum")
     @classmethod
-    def maximum_must_be_positive(cls, value: Decimal | None) -> Decimal | None:
+    def validate_maximum(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and value <= 0:
             raise ValueError("maximum must be positive")
         return value
 
     @model_validator(mode="after")
-    def maximum_requires_currency(self) -> PriceFilter:
-        if self.maximum is not None and self.currency is None:
-            raise ValueError("currency is required when maximum is set")
+    def validate_price_pair(self) -> PriceFilter:
+        if (self.maximum is None) != (self.currency is None):
+            raise ValueError("maximum and currency must be provided together")
         return self
 
 
@@ -141,19 +251,13 @@ class SearchSchedule(DomainModel):
     @field_validator("times", mode="before")
     @classmethod
     def normalize_times(cls, value: object) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str) or not isinstance(value, (list, tuple)):
-            raise ValueError("times must be a sequence of HH:MM values")
+        values = _ordered_strings(value, "times")
         normalized: list[str] = []
-        for raw_time in value:
-            if not isinstance(raw_time, str):
-                raise ValueError("schedule times must be strings")
-            time_value = raw_time.strip()
-            if len(time_value) != 5 or time_value[2] != ":":
+        for raw_time in values:
+            if len(raw_time) != 5 or raw_time[2] != ":":
                 raise ValueError("schedule times must use HH:MM")
             try:
-                hour, minute = (int(part) for part in time_value.split(":", 1))
+                hour, minute = (int(part) for part in raw_time.split(":", 1))
             except ValueError as exc:
                 raise ValueError("schedule times must use HH:MM") from exc
             if not (0 <= hour <= 23 and 0 <= minute <= 59):
@@ -166,12 +270,17 @@ class SearchSchedule(DomainModel):
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, value: str) -> str:
-        timezone = value.strip()
         try:
-            ZoneInfo(timezone)
+            ZoneInfo(value)
         except ZoneInfoNotFoundError as exc:
             raise ValueError("timezone must be a valid IANA timezone") from exc
-        return timezone
+        return value
+
+    @model_validator(mode="after")
+    def validate_enabled_schedule(self) -> SearchSchedule:
+        if self.enabled and not self.times:
+            raise ValueError("an enabled schedule requires at least one time")
+        return self
 
 
 class SearchProfile(DomainModel):
@@ -189,44 +298,29 @@ class SearchProfile(DomainModel):
     notification_mode: Literal["disabled", "matches", "matches_or_failure"] = "disabled"
     schedule: SearchSchedule = Field(default_factory=SearchSchedule)
 
-    @field_validator("id")
+    @field_validator("id", mode="before")
     @classmethod
-    def validate_id(cls, value: str) -> str:
-        cleaned = value.strip().casefold()
-        if not cleaned or any(part == "" for part in cleaned.split("-")):
-            raise ValueError("id must be a non-empty slug")
-        if any(not (char.isalnum() or char == "-") for char in cleaned):
-            raise ValueError("id must be a non-empty slug")
-        return cleaned
+    def validate_id(cls, value: object) -> str:
+        return _canonical_slug(value, "id")
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("name must not be empty")
-        return " ".join(value.strip().split())
+        return _nonempty_text(value, "name")
 
     @field_validator(
         "keywords_any", "keywords_all", "exact_phrases", "exclude_keywords", mode="before"
     )
     @classmethod
     def normalize_keyword_lists(cls, value: object) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str) or not isinstance(value, (list, tuple, set)):
-            raise ValueError("keyword fields must be sequences")
-        if any(not isinstance(item, str) for item in value):
-            raise ValueError("keyword values must be strings")
-        return tuple(dedupe_terms(value))
+        values = _ordered_strings(value, "keyword list")
+        return tuple(dedupe_terms(values))
 
     @field_validator("source_ids", mode="before")
     @classmethod
     def normalize_sources(cls, value: object) -> tuple[str, ...]:
-        if value is None or isinstance(value, str) or not isinstance(value, (list, tuple, set)):
-            raise ValueError("source_ids must be a non-empty sequence")
-        if any(not isinstance(item, str) for item in value):
-            raise ValueError("source_ids values must be strings")
-        return tuple(dedupe_terms(item.casefold() for item in value))
+        values = _ordered_strings(value, "source_ids")
+        return _dedupe_exact(values, "source_id")
 
     @field_validator("boost_keywords", mode="before")
     @classmethod
@@ -242,15 +336,21 @@ class SearchProfile(DomainModel):
                 raise ValueError("boost keyword keys must be strings")
             key = " ".join(raw_key.strip().split())
             normalized = normalize_term(key)
-            if not normalized or normalized in normalized_keys:
-                continue
+            if not normalized:
+                raise ValueError("boost keyword keys must not be empty")
             if isinstance(raw_weight, bool) or not isinstance(raw_weight, int):
                 raise ValueError("boost weights must be integers")
             if not 0 < raw_weight <= 100:
                 raise ValueError("boost weights must be between 1 and 100")
-            normalized_keys.add(normalized)
-            result[key] = raw_weight
-        return result
+            if normalized not in normalized_keys:
+                normalized_keys.add(normalized)
+                result[key] = raw_weight
+        return dict(sorted(result.items(), key=lambda item: normalize_term(item[0])))
+
+    @field_validator("boost_keywords")
+    @classmethod
+    def freeze_boosts(cls, value: dict[str, StrictInt]) -> dict[str, StrictInt]:
+        return FrozenDict(value)
 
     @field_validator("minimum_score")
     @classmethod
@@ -265,17 +365,94 @@ class SearchProfile(DomainModel):
             raise ValueError("at least one source_id is required")
         if not (self.keywords_any or self.keywords_all or self.exact_phrases):
             raise ValueError("at least one positive matching rule is required")
+
+        positive_groups = (self.keywords_any, self.keywords_all, self.exact_phrases)
+        seen_positive: dict[str, str] = {}
+        for group_name, terms in zip(
+            ("keywords_any", "keywords_all", "exact_phrases"), positive_groups, strict=True
+        ):
+            for term in terms:
+                normalized = normalize_term(term)
+                if normalized in seen_positive:
+                    raise ValueError(
+                        f"positive rule {term!r} repeats {seen_positive[normalized]!r}"
+                    )
+                seen_positive[normalized] = group_name
+
+        excluded = {normalize_term(term) for term in self.exclude_keywords}
+        positive = set(seen_positive)
+        if positive & excluded:
+            raise ValueError("positive rules and exclusions must not overlap")
+        boosts = {normalize_term(term) for term in self.boost_keywords}
+        if boosts & excluded:
+            raise ValueError("boosts and exclusions must not overlap")
         return self
 
 
 class MatchResult(DomainModel):
     profile_id: str
     opportunity_key: str
-    matched: bool
-    score: int = 0
+    matched: StrictBool
+    score: StrictInt = 0
     matched_terms: tuple[str, ...] = ()
     excluded_terms: tuple[str, ...] = ()
     missing_required_terms: tuple[str, ...] = ()
     matched_fields: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     rejection_reasons: tuple[str, ...] = ()
     explanation: str
+
+    _validate_profile_id = field_validator("profile_id", mode="before")(
+        lambda value: _nonempty_text(value, "profile_id")
+    )
+    _validate_opportunity_key = field_validator("opportunity_key", mode="before")(
+        lambda value: _nonempty_text(value, "opportunity_key")
+    )
+    _validate_explanation = field_validator("explanation", mode="before")(
+        lambda value: _nonempty_text(value, "explanation")
+    )
+
+    @field_validator("matched_terms", "excluded_terms", "missing_required_terms", mode="before")
+    @classmethod
+    def validate_ordered_terms(cls, value: object) -> tuple[str, ...]:
+        values = _ordered_strings(value, "result terms")
+        if any(not item.strip() for item in values):
+            raise ValueError("result terms must not be empty")
+        return tuple(values)
+
+    @field_validator("matched_fields", mode="before")
+    @classmethod
+    def validate_matched_fields(cls, value: object) -> dict[str, tuple[str, ...]]:
+        if not isinstance(value, dict):
+            raise ValueError("matched_fields must be an object")
+        result: dict[str, tuple[str, ...]] = {}
+        for term, fields in value.items():
+            if not isinstance(term, str) or not term.strip():
+                raise ValueError("matched_fields terms must not be empty")
+            field_values = _ordered_strings(fields, "matched_fields values")
+            if not field_values or any(field not in _SEARCH_FIELDS for field in field_values):
+                raise ValueError("matched_fields contains an unsupported field")
+            result[term] = tuple(field_values)
+        return result
+
+    @field_validator("matched_fields")
+    @classmethod
+    def freeze_matched_fields(cls, value: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+        return FrozenDict(value)
+
+    @field_validator("score")
+    @classmethod
+    def validate_score(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("score must not be negative")
+        return value
+
+    @model_validator(mode="after")
+    def validate_result_state(self) -> MatchResult:
+        if self.matched:
+            if self.rejection_reasons or self.excluded_terms or self.missing_required_terms:
+                raise ValueError("a successful result must not contain rejection details")
+        elif not self.rejection_reasons or any(
+            reason not in _VALID_REJECTIONS for reason in self.rejection_reasons
+        ):
+            raise ValueError("a rejected result must contain valid rejection codes")
+        return self

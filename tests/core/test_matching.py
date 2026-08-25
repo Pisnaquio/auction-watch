@@ -129,6 +129,7 @@ def test_price_maximum_unknown_price_and_currency_policies() -> None:
     maximum = PriceFilter(maximum=Decimal("900"), currency="UYU")
     too_expensive = match_lot(make_profile(price_filter=maximum), make_lot())
     assert too_expensive.matched is False
+    assert too_expensive.score == 3
     assert too_expensive.rejection_reasons == ("price_above_maximum",)
 
     include_unknown = match_lot(
@@ -170,10 +171,10 @@ def test_inventory_keeps_rejections_and_preserves_input_order() -> None:
     results = match_inventory(profiles, [first, second])
 
     assert [(result.profile_id, result.opportunity_key) for result in results] == [
-        ("vinilos", "remates:7691:1"),
-        ("vinilos", "remates:7691:2"),
-        ("libros", "remates:7691:1"),
-        ("libros", "remates:7691:2"),
+        ("vinilos", "aw1:remates:7691:1"),
+        ("vinilos", "aw1:remates:7691:2"),
+        ("libros", "aw1:remates:7691:1"),
+        ("libros", "aw1:remates:7691:2"),
     ]
     assert [result.matched for result in results] == [True, False, False, True]
 

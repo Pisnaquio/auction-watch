@@ -7,44 +7,62 @@ Source adapters will construct these models from their own responses later.
 ## `AuctionGroup`
 
 `AuctionGroup` contains `source_id`, `auction_id`, `title`, `url`, `category`,
-`active`, `closing_at`, and `observed_at`. Identifiers and descriptive fields
-cannot be empty. Dates are timezone-aware.
+`active`, `closing_at`, and `observed_at`. `source_id` is an exact ASCII
+lowercase slug. `auction_id` is an opaque non-empty external identifier with a
+bounded length. Category is optional metadata and may be empty. Dates are
+timezone-aware, and the URL must be absolute HTTP/HTTPS without credentials.
 
 ## `AuctionLot`
 
 `AuctionLot` contains `source_id`, `auction_id`, `lot_id`, `title`,
 `description`, `category`, `price_value`, `price_currency`, `price_label`,
 `closing_at`, `lot_url`, `auction_url`, `image_url`, `active`, and
-`observed_at`. Prices use `Decimal`, currencies are uppercase, and raw source
-payloads are deliberately not part of the model.
+`observed_at`. Prices use finite non-negative `Decimal` values paired with
+exactly three ASCII uppercase currency letters. Raw source payloads are
+deliberately not part of the model. URLs are absolute HTTP/HTTPS without
+credentials; a blank image URL becomes `None`.
 
-The canonical identity is `(source_id, auction_id, lot_id)`. The stable
-`opportunity_key` property renders it as `source_id:auction_id:lot_id`.
+The persistence identity is the composite tuple `(source_id, auction_id,
+lot_id)`. The public `opportunity_key` is the versioned reversible form
+`aw1:<source-escaped>:<auction-escaped>:<lot-escaped>`, with each component
+percent-encoded independently. `encode_opportunity_key` and
+`decode_opportunity_key` reject malformed keys and prevent delimiter
+collisions.
 
 ## `SearchProfile`
 
-`SearchProfile` contains a slug `id`, non-empty `name`, `enabled`,
+`SearchProfile` contains an exact ASCII lowercase slug `id`, non-empty `name`, `enabled`,
 `keywords_any`, `keywords_all`, `exact_phrases`, `exclude_keywords`, bounded
 positive-integer `boost_keywords`, at least one `source_ids`, non-negative
 `minimum_score`, an optional `PriceFilter`, notification mode, and a validated
 `SearchSchedule`.
 
 Terms are deduplicated case- and accent-insensitively while their first readable
-spelling is retained. A profile must have at least one positive rule from
-`keywords_any`, `keywords_all`, or `exact_phrases`.
+spelling is retained. Ordered keyword, source, and schedule inputs accept only
+lists or tuples. Source IDs are deduplicated by exact equality and are not
+linguistically normalized. A profile must have at least one positive rule from
+`keywords_any`, `keywords_all`, or `exact_phrases`; repeated normalized rules
+across those groups are rejected.
 
-`PriceFilter` uses a positive `Decimal` maximum, an uppercase currency, and an
-`on_unknown` policy of `include` or `exclude`. Currency conversion is not part
-of this contract. `SearchSchedule` validates IANA timezones and canonicalizes
-duplicate `HH:MM` values.
+Positive rules cannot overlap exclusions. A boost may overlap a positive rule,
+but cannot overlap an exclusion. Boosts are immutable after construction and
+remain JSON objects.
+
+`PriceFilter` uses a positive finite `Decimal` maximum paired with an uppercase
+currency, and an `on_unknown` policy of `include` or `exclude`. Currency
+conversion is not part of this contract. `SearchSchedule` validates IANA
+timezones, canonicalizes duplicate `HH:MM` values, and requires at least one
+time when enabled; disabled schedules may retain configured times.
 
 ## `MatchResult`
 
 `MatchResult` records `profile_id`, `opportunity_key`, `matched`, `score`,
 `matched_terms`, `excluded_terms`, `missing_required_terms`,
 `matched_fields`, machine-readable `rejection_reasons`, and a stable human
-explanation. Rejections are retained so later layers can decide whether to
-display or filter them.
+explanation. `matched_fields` is restricted to `title`, `description`, and
+`category`, and mappings are deeply immutable while remaining JSON objects.
+A successful result cannot contain rejection details; a rejected result must
+contain at least one known rejection code.
 
 ## `Run`
 

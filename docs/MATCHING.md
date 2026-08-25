@@ -24,7 +24,7 @@ automatic alias expansion; users define variants explicitly.
 The searched fields are `title`, `description`, and `category`. Every matched
 term records the fields where it occurred.
 
-## Evaluation order
+## Evaluation order and gates
 
 1. Disabled profiles are rejected.
 2. Lots from sources not selected by the profile are rejected.
@@ -34,8 +34,13 @@ term records the fields where it occurred.
 6. At least one positive trigger must be present: a `keywords_any` term, an
    `exact_phrase`, or all `keywords_all` terms when those are the only positive
    rules.
-7. The price policy is evaluated.
-8. The deterministic score is calculated and compared with `minimum_score`.
+7. Once a positive candidate exists, the deterministic diagnostic score is
+   calculated, including boosts and title bonuses.
+8. The price policy is applied as a gate.
+9. The diagnostic score is compared with `minimum_score` as the final gate.
+
+This means price and minimum-score rejections retain the score that explains
+the candidate, while structural rejections can have score zero.
 
 The machine-readable rejection codes are `profile_disabled`,
 `source_not_selected`, `lot_inactive`, `excluded_term`,
@@ -52,11 +57,12 @@ The constants live together in `core/matching.py`:
 | Each `keywords_all` term | +3 |
 | Each exact phrase | +5 |
 | Each matching boost keyword | configured positive integer |
-| Each matched term/phrase in the title | +1 |
+| Each matched non-boost term/phrase in the title | +1 |
 
 Each rule contributes at most once, regardless of repeated appearances. A
 boost adds score only after a positive non-boost rule has triggered; a boost
-cannot create a match by itself.
+cannot create a match by itself. The title bonus is deliberately not applied to
+boost keywords.
 
 ## Price
 
