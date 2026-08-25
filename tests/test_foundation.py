@@ -22,9 +22,10 @@ def test_health() -> None:
 def test_readiness_with_usable_directory(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AW_DATA_DIR", str(tmp_path))
     get_settings.cache_clear()
-    response = client.get("/api/v1/readiness")
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
+    with TestClient(app) as running_client:
+        response = running_client.get("/api/v1/readiness")
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
 
 
 def test_readiness_with_unusable_directory(tmp_path: Path, monkeypatch) -> None:
@@ -32,9 +33,10 @@ def test_readiness_with_unusable_directory(tmp_path: Path, monkeypatch) -> None:
     data_path.write_text("occupied", encoding="utf-8")
     monkeypatch.setenv("AW_DATA_DIR", str(data_path))
     get_settings.cache_clear()
-    response = client.get("/api/v1/readiness")
-    assert response.status_code == 503
-    assert response.json()["ok"] is False
+    with TestClient(app) as running_client:
+        response = running_client.get("/api/v1/readiness")
+        assert response.status_code == 503
+        assert response.json()["ok"] is False
 
 
 def test_default_configuration(monkeypatch) -> None:

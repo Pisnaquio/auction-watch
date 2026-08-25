@@ -22,7 +22,8 @@ uvicorn auction_watch.main:app --reload --port 8789
 ```
 
 The service exposes `/api/v1/health` and `/api/v1/readiness`. The readiness
-endpoint requires the configured data directory to exist and be usable.
+endpoint requires a usable, fully migrated SQLite database at
+`${AW_DATA_DIR}/auction-watch.sqlite3` (default `${AW_DATA_DIR}=/data`).
 
 ## Docker
 
@@ -40,4 +41,5 @@ independent profiles. It has no dependency on a collection application,
 desktop automation, or personal data.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-[docs/CONTRACTS.md](docs/CONTRACTS.md), and [SECURITY.md](SECURITY.md).
+[docs/CONTRACTS.md](docs/CONTRACTS.md), [docs/PERSISTENCE.md](docs/PERSISTENCE.md),
+and [SECURITY.md](SECURITY.md).

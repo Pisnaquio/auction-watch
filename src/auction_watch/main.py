@@ -1,17 +1,22 @@
-"""FastAPI entry point for the foundation service."""
+"""FastAPI entry point and application lifecycle."""
+
+from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from auction_watch import __version__
 from auction_watch.config import Settings, get_settings
-
-app = FastAPI(title="Auction Watch", version=__version__)
+from auction_watch.persistence.database import Database
+from auction_watch.persistence.migrations import upgrade_head
+from auction_watch.persistence.repository import ProfileRepository
 
 
 def _web_dist() -> Path:
@@ -21,45 +26,66 @@ def _web_dist() -> Path:
     return Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
-if _web_dist().is_dir():
-    app.mount("/assets", StaticFiles(directory=_web_dist() / "assets"), name="assets")
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create an application without opening SQLite during import."""
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        runtime_settings = settings or get_settings()
+        database: Database | None = None
+        try:
+            try:
+                database = Database.open(runtime_settings.data_dir)
+                upgrade_head(runtime_settings.data_dir, database.engine)
+            except Exception:
+                if database is not None:
+                    database.dispose()
+                    database = None
+                application.state.database = None
+                application.state.profile_repository = None
+            else:
+                application.state.database = database
+                application.state.profile_repository = ProfileRepository(database)
+            yield
+        finally:
+            if database is not None:
+                database.dispose()
+            application.state.database = None
+            application.state.profile_repository = None
+
+    application = FastAPI(title="Auction Watch", version=__version__, lifespan=lifespan)
+    web_dist = _web_dist()
+    if web_dist.is_dir() and (web_dist / "assets").is_dir():
+        application.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")
+
+    @application.get("/api/v1/health")
+    def health() -> dict[str, Any]:
+        """Confirm that the process is alive without consulting SQLite."""
+
+        return {"ok": True, "service": "auction-watch", "version": __version__}
+
+    @application.get("/api/v1/readiness")
+    def readiness(request: Request) -> JSONResponse:
+        """Confirm that SQLite is migrated and can answer a simple query."""
+
+        database = getattr(request.app.state, "database", None)
+        ready = database is not None and database.check_ready()
+        payload = {"ok": ready, "service": "auction-watch", "version": __version__}
+        return JSONResponse(status_code=200 if ready else 503, content=payload)
+
+    @application.get("/", include_in_schema=False)
+    def index() -> Response:
+        """Serve the compiled frontend when it is available."""
+
+        index_file = _web_dist() / "index.html"
+        if index_file.is_file():
+            return FileResponse(index_file)
+        return JSONResponse({"service": "auction-watch", "version": __version__})
+
+    return application
 
 
-def _readiness(settings: Settings) -> tuple[bool, str | None]:
-    data_dir = settings.data_dir
-    if not data_dir.exists():
-        return False, None
-    if not data_dir.is_dir():
-        return False, None
-    if not os.access(data_dir, os.R_OK | os.W_OK | os.X_OK):
-        return False, None
-    return True, None
-
-
-@app.get("/api/v1/health")
-def health() -> dict[str, Any]:
-    """Confirm that the process is alive without exposing runtime details."""
-
-    return {"ok": True, "service": "auction-watch", "version": __version__}
-
-
-@app.get("/api/v1/readiness")
-def readiness() -> JSONResponse:
-    """Confirm that the configured data directory is usable."""
-
-    ready, _ = _readiness(get_settings())
-    payload = {"ok": ready, "service": "auction-watch", "version": __version__}
-    return JSONResponse(status_code=200 if ready else 503, content=payload)
-
-
-@app.get("/", include_in_schema=False)
-def index() -> Response:
-    """Serve the compiled frontend when it is available."""
-
-    index_file = _web_dist() / "index.html"
-    if index_file.is_file():
-        return FileResponse(index_file)
-    return JSONResponse({"service": "auction-watch", "version": __version__})
+app = create_app()
 
 
 def run() -> None:

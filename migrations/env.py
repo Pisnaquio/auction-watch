@@ -1,20 +1,37 @@
-"""Alembic environment reserved for the first persistence migration."""
+"""Alembic environment for the standalone SQLite schema."""
 
+from __future__ import annotations
+
+import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+
+from auction_watch.persistence.database import create_sqlite_engine, sqlite_path
+from auction_watch.persistence.models import Base
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
+
+
+def _data_dir() -> Path:
+    return Path(os.environ.get("AW_DATA_DIR", "/data"))
+
+
+def _configure(connection: object) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
 
 
 def run_migrations_offline() -> None:
+    data_dir = _data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    url = f"sqlite:///{sqlite_path(data_dir)}"
     context.configure(
-        url=config.get_main_option("sqlalchemy.url"),
+        url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -24,15 +41,23 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        _configure(supplied_connection)
         with context.begin_transaction():
             context.run_migrations()
+        return
+
+    data_dir = _data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    engine = create_sqlite_engine(data_dir)
+    try:
+        with engine.connect() as connection:
+            _configure(connection)
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        engine.dispose()
 
 
 if context.is_offline_mode():
