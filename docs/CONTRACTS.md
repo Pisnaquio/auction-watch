@@ -23,11 +23,13 @@ deliberately not part of the model. URLs are absolute HTTP/HTTPS without
 credentials; a blank image URL becomes `None`.
 
 The persistence identity is the composite tuple `(source_id, auction_id,
-lot_id)`. The public `opportunity_key` is the versioned reversible form
-`aw1:<source-escaped>:<auction-escaped>:<lot-escaped>`, with each component
-percent-encoded independently. `encode_opportunity_key` and
-`decode_opportunity_key` reject malformed keys and prevent delimiter
-collisions.
+lot_id)`. The public `opportunity_key` is exclusively the canonical,
+versioned reversible form `aw1:<source-escaped>:<auction-escaped>:<lot-escaped>`,
+with each component percent-encoded independently. Decoding uses strict UTF-8
+and then requires `encode_opportunity_key(*decoded) == original_key`;
+unnecessary encoding such as `%61`, lowercase hex, invalid UTF-8, legacy keys,
+and malformed components are rejected. The encoder and decoder prevent
+delimiter collisions and alternate representations.
 
 ## `SearchProfile`
 
@@ -56,12 +58,15 @@ time when enabled; disabled schedules may retain configured times.
 
 ## `MatchResult`
 
-`MatchResult` records `profile_id`, `opportunity_key`, `matched`, `score`,
+`MatchResult` records a canonical profile slug, a canonical `opportunity_key`,
+`matched`, `score`,
 `matched_terms`, `excluded_terms`, `missing_required_terms`,
 `matched_fields`, machine-readable `rejection_reasons`, and a stable human
 explanation. `matched_fields` is restricted to `title`, `description`, and
-`category`, and mappings are deeply immutable while remaining JSON objects.
-A successful result cannot contain rejection details; a rejected result must
+`category`; its terms must be present in `matched_terms` or `excluded_terms`.
+Mappings are deeply immutable while remaining JSON objects, and term and field
+lists cannot contain duplicates. A successful result must contain at least one
+matched term and cannot contain rejection details; a rejected result must
 contain at least one known rejection code.
 
 ## `Run`

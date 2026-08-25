@@ -61,6 +61,18 @@ def test_malformed_opportunity_keys_are_rejected(key: str) -> None:
         decode_opportunity_key(key)
 
 
+def test_non_canonical_and_invalid_utf8_keys_are_rejected() -> None:
+    for key in ("aw1:%61:b:c", "aw1:a:%2f:c", "aw1:a:%FF:c"):
+        with pytest.raises(ValueError):
+            decode_opportunity_key(key)
+
+
+def test_external_identity_components_round_trip_reserved_chars_and_unicode() -> None:
+    key = encode_opportunity_key("remates", "remate / edición:1", "lote: 東京")
+
+    assert decode_opportunity_key(key) == ("remates", "remate / edición:1", "lote: 東京")
+
+
 def test_internal_slugs_are_ascii_lowercase_and_sources_dedupe_exactly() -> None:
     profile = make_profile(source_ids=["bavastro", "castells", "bavastro"])
     assert profile.source_ids == ("bavastro", "castells")
@@ -147,6 +159,7 @@ def test_mappings_are_deeply_immutable_and_json_is_deterministic() -> None:
         profile_id=first.id,
         opportunity_key=make_lot().opportunity_key,
         matched=True,
+        matched_terms=("vinilo",),
         matched_fields={"vinilo": ("title",)},
         explanation="Coincidió.",
     )
@@ -159,14 +172,23 @@ def test_mappings_are_deeply_immutable_and_json_is_deterministic() -> None:
 
 
 def test_match_result_states_and_fields_are_validated() -> None:
+    valid_key = make_lot().opportunity_key
     with pytest.raises(ValidationError):
-        MatchResult(profile_id="p", opportunity_key="k", matched=1, explanation="x")
+        MatchResult(profile_id="p", opportunity_key=valid_key, matched=1, explanation="x")
     with pytest.raises(ValidationError):
-        MatchResult(profile_id="p", opportunity_key="k", matched=False, explanation="x")
+        MatchResult(
+            profile_id="not a slug", opportunity_key=valid_key, matched=False, explanation="x"
+        )
+    with pytest.raises(ValidationError):
+        MatchResult(profile_id="p", opportunity_key="not-an-aw-key", matched=False, explanation="x")
+    with pytest.raises(ValidationError):
+        MatchResult(profile_id="p", opportunity_key="aw1:%61:b:c", matched=False, explanation="x")
+    with pytest.raises(ValidationError):
+        MatchResult(profile_id="p", opportunity_key=valid_key, matched=False, explanation="x")
     with pytest.raises(ValidationError):
         MatchResult(
             profile_id="p",
-            opportunity_key="k",
+            opportunity_key=valid_key,
             matched=True,
             excluded_terms=("réplica",),
             explanation="x",
@@ -174,7 +196,7 @@ def test_match_result_states_and_fields_are_validated() -> None:
     with pytest.raises(ValidationError):
         MatchResult(
             profile_id="p",
-            opportunity_key="k",
+            opportunity_key=valid_key,
             matched=False,
             rejection_reasons=("not-a-code",),
             explanation="x",
@@ -182,8 +204,34 @@ def test_match_result_states_and_fields_are_validated() -> None:
     with pytest.raises(ValidationError):
         MatchResult(
             profile_id="p",
-            opportunity_key="k",
+            opportunity_key=valid_key,
             matched=True,
             matched_fields={"vinilo": ("url",)},
+            explanation="x",
+        )
+    with pytest.raises(ValidationError):
+        MatchResult(
+            profile_id="p",
+            opportunity_key=valid_key,
+            matched=True,
+            matched_terms=("vinilo",),
+            matched_fields={"otro": ("title",)},
+            explanation="x",
+        )
+    with pytest.raises(ValidationError):
+        MatchResult(
+            profile_id="p",
+            opportunity_key=valid_key,
+            matched=True,
+            matched_terms=("vinilo",),
+            matched_fields={"vinilo": ("title", "title")},
+            explanation="x",
+        )
+    with pytest.raises(ValidationError):
+        MatchResult(
+            profile_id="p",
+            opportunity_key=valid_key,
+            matched=True,
+            matched_terms=("vinilo", "VÍNILO"),
             explanation="x",
         )

@@ -131,6 +131,7 @@ def test_models_are_immutable() -> None:
         profile_id=profile.id,
         opportunity_key=lot.opportunity_key,
         matched=True,
+        matched_terms=("vinilo",),
         explanation="Coincidió.",
     )
 

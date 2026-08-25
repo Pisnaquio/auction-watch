@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from auction_watch.core.models import AuctionLot, MatchResult, SearchProfile
-from auction_watch.core.normalization import contains_term, normalize_text
+from auction_watch.core.normalization import contains_term, normalize_term, normalize_text
 
 ANY_SCORE = 2
 ALL_SCORE = 3
@@ -43,12 +43,21 @@ def _add_found(
     found: dict[str, _FoundRule],
     rule: _FoundRule,
 ) -> None:
-    existing = found.get(rule.term)
+    key = normalize_term(rule.term)
+    existing = found.get(key)
     if existing is None:
-        found[rule.term] = rule
+        found[key] = rule
         return
     fields = tuple(dict.fromkeys((*existing.fields, *rule.fields)))
-    found[rule.term] = _FoundRule(term=rule.term, fields=fields)
+    found[key] = _FoundRule(term=existing.term, fields=fields)
+
+
+def _found_terms(found: dict[str, _FoundRule]) -> tuple[str, ...]:
+    return tuple(rule.term for rule in found.values())
+
+
+def _found_fields(found: dict[str, _FoundRule]) -> dict[str, tuple[str, ...]]:
+    return {rule.term: rule.fields for rule in found.values()}
 
 
 def _human_list(values: Sequence[str]) -> str:
@@ -144,8 +153,8 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
         if rule is not None:
             _add_found(excluded, rule)
     if excluded:
-        excluded_terms = tuple(excluded)
-        matched_fields = {term: rule.fields for term, rule in excluded.items()}
+        excluded_terms = _found_terms(excluded)
+        matched_fields = _found_fields(excluded)
         verb = "aparecieron" if len(excluded_terms) > 1 else "apareció"
         return _result(
             profile,
@@ -184,9 +193,9 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
             profile,
             lot,
             matched=False,
-            matched_terms=tuple(found),
+            matched_terms=_found_terms(found),
             missing_required_terms=tuple(all_missing),
-            matched_fields={term: rule.fields for term, rule in found.items()},
+            matched_fields=_found_fields(found),
             rejection_reasons=("missing_required_terms",),
             explanation=f"Descartado porque faltan {_human_list(all_missing)}.",
         )
@@ -197,8 +206,8 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
             profile,
             lot,
             matched=False,
-            matched_terms=tuple(found),
-            matched_fields={term: rule.fields for term, rule in found.items()},
+            matched_terms=_found_terms(found),
+            matched_fields=_found_fields(found),
             rejection_reasons=("no_positive_trigger",),
             explanation="Descartado porque no se encontró un disparador positivo.",
         )
@@ -223,14 +232,14 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
     )
 
     price_rejection = _price_rejection(profile, lot)
-    matched_fields = {term: rule.fields for term, rule in found.items()}
+    matched_fields = _found_fields(found)
     if price_rejection is not None:
         return _result(
             profile,
             lot,
             matched=False,
             score=score,
-            matched_terms=tuple(found),
+            matched_terms=_found_terms(found),
             matched_fields=matched_fields,
             rejection_reasons=(price_rejection,),
             explanation=_price_explanation(profile, lot, price_rejection),
@@ -241,7 +250,7 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
             lot,
             matched=False,
             score=score,
-            matched_terms=tuple(found),
+            matched_terms=_found_terms(found),
             matched_fields=matched_fields,
             rejection_reasons=("score_below_minimum",),
             explanation=(
@@ -250,7 +259,7 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
             ),
         )
 
-    matched_terms = tuple(found)
+    matched_terms = _found_terms(found)
     title_terms = tuple(
         rule.term for rule in (*any_found, *all_found, *exact_found) if "title" in rule.fields
     )

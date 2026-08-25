@@ -22,8 +22,8 @@ from pydantic import (
 from auction_watch.core.frozen import FrozenDict
 from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
 from auction_watch.core.normalization import dedupe_terms, normalize_term
+from auction_watch.core.validation import canonical_slug, external_id
 
-_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _CURRENCY = re.compile(r"[A-Z]{3}\Z")
 _SEARCH_FIELDS = frozenset({"title", "description", "category"})
 _VALID_REJECTIONS = frozenset(
@@ -58,19 +58,6 @@ def _nonempty_text(value: object, label: str) -> str:
     cleaned = value.strip()
     if not cleaned:
         raise ValueError(f"{label} must not be empty")
-    return cleaned
-
-
-def _canonical_slug(value: object, label: str) -> str:
-    if not isinstance(value, str) or _SLUG.fullmatch(value) is None:
-        raise ValueError(f"{label} must be an ASCII lowercase slug")
-    return value
-
-
-def _external_id(value: object, label: str) -> str:
-    cleaned = _nonempty_text(value, label)
-    if len(cleaned) > 256 or any(ord(char) < 32 for char in cleaned):
-        raise ValueError(f"{label} exceeds the supported identifier limit")
     return cleaned
 
 
@@ -122,17 +109,6 @@ def _ordered_strings(value: object, label: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _dedupe_exact(values: list[str] | tuple[str, ...], label: str) -> tuple[str, ...]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        canonical = _canonical_slug(value, label)
-        if canonical not in seen:
-            seen.add(canonical)
-            result.append(canonical)
-    return tuple(result)
-
-
 class DomainModel(BaseModel):
     """Base settings shared by immutable, strict domain models."""
 
@@ -150,10 +126,10 @@ class AuctionGroup(DomainModel):
     observed_at: AwareDatetime
 
     _validate_source_id = field_validator("source_id", mode="before")(
-        lambda value: _canonical_slug(value, "source_id")
+        lambda value: canonical_slug(value, "source_id")
     )
     _validate_auction_id = field_validator("auction_id", mode="before")(
-        lambda value: _external_id(value, "auction_id")
+        lambda value: external_id(value, "auction_id")
     )
     _validate_title = field_validator("title", mode="before")(
         lambda value: _nonempty_text(value, "title")
@@ -181,13 +157,13 @@ class AuctionLot(DomainModel):
     observed_at: AwareDatetime
 
     _validate_source_id = field_validator("source_id", mode="before")(
-        lambda value: _canonical_slug(value, "source_id")
+        lambda value: canonical_slug(value, "source_id")
     )
     _validate_auction_id = field_validator("auction_id", mode="before")(
-        lambda value: _external_id(value, "auction_id")
+        lambda value: external_id(value, "auction_id")
     )
     _validate_lot_id = field_validator("lot_id", mode="before")(
-        lambda value: _external_id(value, "lot_id")
+        lambda value: external_id(value, "lot_id")
     )
     _validate_title = field_validator("title", mode="before")(
         lambda value: _nonempty_text(value, "title")
@@ -301,7 +277,7 @@ class SearchProfile(DomainModel):
     @field_validator("id", mode="before")
     @classmethod
     def validate_id(cls, value: object) -> str:
-        return _canonical_slug(value, "id")
+        return canonical_slug(value, "id")
 
     @field_validator("name")
     @classmethod
@@ -320,7 +296,9 @@ class SearchProfile(DomainModel):
     @classmethod
     def normalize_sources(cls, value: object) -> tuple[str, ...]:
         values = _ordered_strings(value, "source_ids")
-        return _dedupe_exact(values, "source_id")
+        return tuple(
+            dict.fromkeys(canonical_slug(source_id, "source_id") for source_id in values)
+        )
 
     @field_validator("boost_keywords", mode="before")
     @classmethod
@@ -402,11 +380,16 @@ class MatchResult(DomainModel):
     explanation: str
 
     _validate_profile_id = field_validator("profile_id", mode="before")(
-        lambda value: _nonempty_text(value, "profile_id")
+        lambda value: canonical_slug(value, "profile_id")
     )
-    _validate_opportunity_key = field_validator("opportunity_key", mode="before")(
-        lambda value: _nonempty_text(value, "opportunity_key")
-    )
+
+    @field_validator("opportunity_key", mode="before")
+    @classmethod
+    def validate_opportunity_key(cls, value: object) -> str:
+        key = _nonempty_text(value, "opportunity_key")
+        decode_opportunity_key(key)
+        return key
+
     _validate_explanation = field_validator("explanation", mode="before")(
         lambda value: _nonempty_text(value, "explanation")
     )
@@ -417,6 +400,9 @@ class MatchResult(DomainModel):
         values = _ordered_strings(value, "result terms")
         if any(not item.strip() for item in values):
             raise ValueError("result terms must not be empty")
+        normalized = [normalize_term(item) for item in values]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("result terms must not contain duplicates")
         return tuple(values)
 
     @field_validator("matched_fields", mode="before")
@@ -431,6 +417,8 @@ class MatchResult(DomainModel):
             field_values = _ordered_strings(fields, "matched_fields values")
             if not field_values or any(field not in _SEARCH_FIELDS for field in field_values):
                 raise ValueError("matched_fields contains an unsupported field")
+            if len(field_values) != len(set(field_values)):
+                raise ValueError("matched_fields values must not contain duplicates")
             result[term] = tuple(field_values)
         return result
 
@@ -448,7 +436,12 @@ class MatchResult(DomainModel):
 
     @model_validator(mode="after")
     def validate_result_state(self) -> MatchResult:
+        allowed_terms = set(self.matched_terms) | set(self.excluded_terms)
+        if not set(self.matched_fields).issubset(allowed_terms):
+            raise ValueError("matched_fields contains a term absent from the result terms")
         if self.matched:
+            if not self.matched_terms:
+                raise ValueError("a successful result must contain a matched term")
             if self.rejection_reasons or self.excluded_terms or self.missing_required_terms:
                 raise ValueError("a successful result must not contain rejection details")
         elif not self.rejection_reasons or any(
