@@ -1,43 +1,66 @@
-# Reserved contracts
+# Domain contracts
 
-The following contracts define the vocabulary for later implementation. This
-foundation documents them without implementing source, profile, matching, or
-run behavior.
+The domain contracts are strict, immutable Pydantic v2 models. They are pure
+Python and do not access the network, SQLite, FastAPI, or any concrete source.
+Source adapters will construct these models from their own responses later.
 
 ## `AuctionGroup`
 
-Represents one auction or remate discovered by a source: source identifier,
-auction identifier, title, URL, category, active state, and closing metadata.
+`AuctionGroup` contains `source_id`, `auction_id`, `title`, `url`, `category`,
+`active`, `closing_at`, and `observed_at`. Identifiers and descriptive fields
+cannot be empty. Dates are timezone-aware.
 
 ## `AuctionLot`
 
-Represents a normalized listing: source identifier, auction identifier, lot
-identifier, title, description, category, price value/currency/label, closing
-time, lot URL, auction URL, image URL, and active state.
+`AuctionLot` contains `source_id`, `auction_id`, `lot_id`, `title`,
+`description`, `category`, `price_value`, `price_currency`, `price_label`,
+`closing_at`, `lot_url`, `auction_url`, `image_url`, `active`, and
+`observed_at`. Prices use `Decimal`, currencies are uppercase, and raw source
+payloads are deliberately not part of the model.
+
+The canonical identity is `(source_id, auction_id, lot_id)`. The stable
+`opportunity_key` property renders it as `source_id:auction_id:lot_id`.
 
 ## `SearchProfile`
 
-Represents user-defined search behavior: identity, name, enabled state, any/all
-keywords, exact phrases, exclusions, boosts, source identifiers, score and
-price limits, notification policy, and schedule settings.
+`SearchProfile` contains a slug `id`, non-empty `name`, `enabled`,
+`keywords_any`, `keywords_all`, `exact_phrases`, `exclude_keywords`, bounded
+positive-integer `boost_keywords`, at least one `source_ids`, non-negative
+`minimum_score`, an optional `PriceFilter`, notification mode, and a validated
+`SearchSchedule`.
+
+Terms are deduplicated case- and accent-insensitively while their first readable
+spelling is retained. A profile must have at least one positive rule from
+`keywords_any`, `keywords_all`, or `exact_phrases`.
+
+`PriceFilter` uses a positive `Decimal` maximum, an uppercase currency, and an
+`on_unknown` policy of `include` or `exclude`. Currency conversion is not part
+of this contract. `SearchSchedule` validates IANA timezones and canonicalizes
+duplicate `HH:MM` values.
 
 ## `MatchResult`
 
-Associates a profile with a lot and records score, matched terms, excluded
-terms, searched fields, and a human-readable explanation.
+`MatchResult` records `profile_id`, `opportunity_key`, `matched`, `score`,
+`matched_terms`, `excluded_terms`, `missing_required_terms`,
+`matched_fields`, machine-readable `rejection_reasons`, and a stable human
+explanation. Rejections are retained so later layers can decide whether to
+display or filter them.
 
 ## `Run`
 
-Represents one manual or scheduled scan, including its identifier, status,
-start/end timestamps, per-source status, and content hash.
+`Run` is reserved for the later scheduler and persistence task. It will
+represent one manual or scheduled scan, including its identifier, status,
+timestamps, per-source status, and content hash.
 
 ## `Snapshot`
 
-Represents the immutable published result of a run. It shares the run
-identifier and content hash with the scan and is verified before delivery.
+`Snapshot` is reserved for the later publication task. It will represent the
+immutable published result of a run and share the run identifier and content
+hash with the scan.
 
 ## `AuctionSource`
 
-The common adapter interface will expose source identity, discovery, lot
-fetching, normalization, and health/error information. It must not perform
-profile matching or notification delivery.
+`AuctionSource` is reserved for the later source-adapter task. Its common
+interface will expose source identity, discovery, lot fetching, normalization,
+and health/error information. It must not perform profile matching or
+notification delivery.
