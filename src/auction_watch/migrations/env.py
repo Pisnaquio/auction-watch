@@ -7,6 +7,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
+from sqlalchemy.engine import Connection
 
 from auction_watch.persistence.database import create_sqlite_engine, sqlite_path
 from auction_watch.persistence.models import Base
@@ -22,7 +23,7 @@ def _data_dir() -> Path:
     return Path(os.environ.get("AW_DATA_DIR", "/data"))
 
 
-def _configure(connection: object) -> None:
+def _configure(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
 
 

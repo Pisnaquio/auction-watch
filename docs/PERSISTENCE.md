@@ -28,7 +28,11 @@ Alembic revision `0001_profiles` creates:
 SQLAlchemy models in `auction_watch.persistence.models` are separate from the
 Pydantic domain models. `metadata.create_all()` is not used. Alembic is the
 only schema authority, both through the normal command and the programmatic
-`upgrade_head()` entry point.
+`upgrade_head()` entry point. The Alembic environment, template, and revisions
+are packaged under `auction_watch.migrations` and resolved with
+`importlib.resources`; there is no dependency on the checkout or current
+working directory. `alembic_head()` derives the readiness revision from those
+packaged revisions instead of duplicating a revision constant.
 
 ## SQLite configuration
 
@@ -44,6 +48,16 @@ The repository uses explicit session transactions. A failed source-row insert
 rolls back the profile row in the same transaction. Deleting a profile relies
 on the foreign-key cascade for its ordered source rows.
 
+SQLite runs with driver autocommit disabled at the SQLAlchemy boundary and an
+explicit `BEGIN` event for every transaction. This gives each repository read
+one snapshot across the profile and its ordered source rows. Replacements use
+one conditional `UPDATE ... WHERE id AND revision`; only the transaction that
+updates one row can replace its source rows and advance the revision. Deletes
+use the same conditional pattern. A stale writer is reported as a revision
+conflict, while an absent profile is reported as not found. Other integrity
+failures remain persistence errors rather than being misclassified as duplicate
+profiles.
+
 ## Revisions and repository API
 
 `StoredProfile` is an immutable wrapper around a validated `SearchProfile` plus
@@ -54,7 +68,11 @@ overwriting data.
 
 Reads reconstruct a fresh Pydantic profile, preserving Unicode, Decimal price
 values, mapping immutability, ordered terms/sources, schedules, and notification
-mode. SQLAlchemy rows never leave the persistence layer.
+mode. Empty price filters (`{}` or `PriceFilter()` without a maximum or
+currency) canonicalize to `None`, so `price_on_unknown` is never persisted by
+itself. SQLAlchemy's JSON serializer uses UTF-8 characters directly, stable
+object key ordering, and compact deterministic output while preserving arrays.
+SQLAlchemy rows never leave the persistence layer.
 
 ## Lifecycle and readiness
 
@@ -65,7 +83,8 @@ process liveness only. `/readiness` performs a simple SQLite query and checks
 that `alembic_version` is the expected head without exposing paths or SQL.
 
 If the database cannot be opened or is not at head, readiness returns 503 while
-the liveness endpoint remains available.
+the liveness endpoint remains available. Container health checks call readiness,
+so a migration failure cannot be reported as a healthy application.
 
 ## Current limits
 

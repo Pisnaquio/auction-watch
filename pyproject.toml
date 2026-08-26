@@ -33,7 +33,12 @@ auction-watch = "auction_watch.main:run"
 where = ["src"]
 
 [tool.setuptools.package-data]
-auction_watch = ["py.typed"]
+auction_watch = [
+  "py.typed",
+  "migrations/env.py",
+  "migrations/script.py.mako",
+  "migrations/versions/*.py",
+]
 
 [tool.ruff]
 target-version = "py312"

@@ -18,7 +18,6 @@ COPY src ./src
 RUN pip install --no-cache-dir .
 COPY --from=frontend-build /build/web/dist /app/web/dist
 COPY alembic.ini ./
-COPY migrations ./migrations
 RUN addgroup --system app && adduser --system --ingroup app app \
     && mkdir -p /data \
     && chown -R app:app /app /data
@@ -26,5 +25,5 @@ USER app
 VOLUME ["/data"]
 EXPOSE 8789
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8789/api/v1/health', timeout=3)"
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8789/api/v1/readiness', timeout=3)"
 CMD ["uvicorn", "auction_watch.main:app", "--host", "0.0.0.0", "--port", "8789"]

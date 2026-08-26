@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,6 +31,10 @@ class ProfileNotFoundError(ProfileRepositoryError):
 
 class ProfileRevisionConflictError(ProfileRepositoryError):
     """Raised when an optimistic revision does not match the stored revision."""
+
+
+class ProfilePersistenceError(ProfileRepositoryError):
+    """Raised when SQLite rejects a non-conflict profile write."""
 
 
 @dataclass(frozen=True)
@@ -100,25 +106,30 @@ class ProfileRepository:
             updated_at=_as_utc(row.updated_at),
         )
 
-    def _apply_profile(self, row: ProfileRow, profile: SearchProfile, now: datetime) -> None:
+    def _profile_values(self, profile: SearchProfile, now: datetime) -> dict[str, object]:
         price_filter = profile.price_filter
-        row.id = profile.id
-        row.name = profile.name
-        row.enabled = profile.enabled
-        row.keywords_any = list(profile.keywords_any)
-        row.keywords_all = list(profile.keywords_all)
-        row.exact_phrases = list(profile.exact_phrases)
-        row.exclude_keywords = list(profile.exclude_keywords)
-        row.boost_keywords = dict(profile.boost_keywords)
-        row.minimum_score = profile.minimum_score
-        row.price_maximum = str(price_filter.maximum) if price_filter else None
-        row.price_currency = price_filter.currency if price_filter else None
-        row.price_on_unknown = price_filter.on_unknown if price_filter else None
-        row.notification_mode = profile.notification_mode
-        row.schedule_enabled = profile.schedule.enabled
-        row.schedule_times = list(profile.schedule.times)
-        row.schedule_timezone = profile.schedule.timezone
-        row.updated_at = now
+        return {
+            "name": profile.name,
+            "enabled": profile.enabled,
+            "keywords_any": list(profile.keywords_any),
+            "keywords_all": list(profile.keywords_all),
+            "exact_phrases": list(profile.exact_phrases),
+            "exclude_keywords": list(profile.exclude_keywords),
+            "boost_keywords": dict(profile.boost_keywords),
+            "minimum_score": profile.minimum_score,
+            "price_maximum": str(price_filter.maximum) if price_filter else None,
+            "price_currency": price_filter.currency if price_filter else None,
+            "price_on_unknown": price_filter.on_unknown if price_filter else None,
+            "notification_mode": profile.notification_mode,
+            "schedule_enabled": profile.schedule.enabled,
+            "schedule_times": list(profile.schedule.times),
+            "schedule_timezone": profile.schedule.timezone,
+            "updated_at": now,
+        }
+
+    def _exists_after_rollback(self, profile_id: str) -> bool:
+        with self._database.sessions.begin() as session:
+            return session.get(ProfileRow, profile_id) is not None
 
     def create(self, profile: SearchProfile) -> StoredProfile:
         now = _utc_now()
@@ -140,18 +151,19 @@ class ProfileRepository:
             schedule_times=[],
             schedule_timezone=profile.schedule.timezone,
         )
-        self._apply_profile(row, profile, now)
+        for field, value in self._profile_values(profile, now).items():
+            setattr(row, field, value)
         try:
             with self._database.sessions.begin() as session:
-                if session.get(ProfileRow, profile.id) is not None:
-                    raise ProfileAlreadyExistsError(profile.id)
                 session.add(row)
                 session.flush()
                 self._insert_sources(session, profile)
                 session.flush()
                 return self._row_to_stored(session, row)
         except IntegrityError as exc:
-            raise ProfileAlreadyExistsError(profile.id) from exc
+            if self._exists_after_rollback(profile.id):
+                raise ProfileAlreadyExistsError(profile.id) from exc
+            raise ProfilePersistenceError("profile create failed") from exc
 
     def get(self, profile_id: str) -> StoredProfile | None:
         with self._database.sessions.begin() as session:
@@ -166,26 +178,47 @@ class ProfileRepository:
     def replace(self, profile: SearchProfile, expected_revision: int) -> StoredProfile:
         now = _utc_now()
         with self._database.sessions.begin() as session:
+            values = self._profile_values(profile, now)
+            values["revision"] = ProfileRow.revision + 1
+            result = cast(CursorResult[tuple[object, ...]], session.execute(
+                update(ProfileRow)
+                .where(
+                    ProfileRow.id == profile.id,
+                    ProfileRow.revision == expected_revision,
+                )
+                .values(**values)
+            ))
+            if result.rowcount != 1:
+                exists = session.scalar(
+                    select(ProfileRow.id).where(ProfileRow.id == profile.id)
+                )
+                if exists is None:
+                    raise ProfileNotFoundError(profile.id)
+                raise ProfileRevisionConflictError(profile.id)
+            try:
+                session.execute(
+                    delete(ProfileSourceRow).where(ProfileSourceRow.profile_id == profile.id)
+                )
+                self._insert_sources(session, profile)
+                session.flush()
+            except IntegrityError as exc:
+                raise ProfilePersistenceError("profile replace failed") from exc
             row = session.get(ProfileRow, profile.id)
             if row is None:
-                raise ProfileNotFoundError(profile.id)
-            if row.revision != expected_revision:
-                raise ProfileRevisionConflictError(profile.id)
-            row.revision += 1
-            self._apply_profile(row, profile, now)
-            session.execute(
-                delete(ProfileSourceRow).where(ProfileSourceRow.profile_id == profile.id)
-            )
-            session.flush()
-            self._insert_sources(session, profile)
-            session.flush()
+                raise ProfilePersistenceError("profile disappeared during replace")
             return self._row_to_stored(session, row)
 
     def delete(self, profile_id: str, expected_revision: int) -> None:
         with self._database.sessions.begin() as session:
-            row = session.get(ProfileRow, profile_id)
-            if row is None:
+            result = cast(CursorResult[tuple[object, ...]], session.execute(
+                delete(ProfileRow).where(
+                    ProfileRow.id == profile_id,
+                    ProfileRow.revision == expected_revision,
+                )
+            ))
+            if result.rowcount == 1:
+                return
+            exists = session.scalar(select(ProfileRow.id).where(ProfileRow.id == profile_id))
+            if exists is None:
                 raise ProfileNotFoundError(profile_id)
-            if row.revision != expected_revision:
-                raise ProfileRevisionConflictError(profile_id)
-            session.delete(row)
+            raise ProfileRevisionConflictError(profile_id)

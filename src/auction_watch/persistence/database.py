@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
 DATABASE_FILENAME = "auction-watch.sqlite3"
-ALEMBIC_HEAD = "0001_profiles"
 
 
 def sqlite_path(data_dir: Path) -> Path:
@@ -22,8 +23,11 @@ def create_sqlite_engine(data_dir: Path) -> Engine:
     path = sqlite_path(data_dir)
     engine = create_engine(
         f"sqlite:///{path}",
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "isolation_level": None},
         future=True,
+        json_serializer=lambda value: json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ),
     )
 
     @event.listens_for(engine, "connect")
@@ -36,6 +40,10 @@ def create_sqlite_engine(data_dir: Path) -> Engine:
             cursor.execute("PRAGMA synchronous=NORMAL")
         finally:
             cursor.close()
+
+    @event.listens_for(engine, "begin")
+    def begin_explicit_transaction(connection: Connection) -> None:
+        connection.exec_driver_sql("BEGIN")
 
     return engine
 
@@ -56,12 +64,14 @@ class Database:
 
     def check_ready(self) -> bool:
         try:
+            from auction_watch.persistence.migrations import alembic_head
+
             with self.engine.connect() as connection:
                 result = connection.execute(text("SELECT 1")).scalar_one()
                 revision = connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one_or_none()
-            return result == 1 and revision == ALEMBIC_HEAD
+            return result == 1 and revision == alembic_head()
         except Exception:
             return False
 

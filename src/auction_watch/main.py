@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,6 +18,8 @@ from auction_watch.config import Settings, get_settings
 from auction_watch.persistence.database import Database
 from auction_watch.persistence.migrations import upgrade_head
 from auction_watch.persistence.repository import ProfileRepository
+
+logger = logging.getLogger(__name__)
 
 
 def _web_dist() -> Path:
@@ -37,7 +40,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 database = Database.open(runtime_settings.data_dir)
                 upgrade_head(runtime_settings.data_dir, database.engine)
-            except Exception:
+            except Exception as exc:
+                logger.error("database initialization failed (%s)", type(exc).__name__)
                 if database is not None:
                     database.dispose()
                     database = None

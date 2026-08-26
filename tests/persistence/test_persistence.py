@@ -4,22 +4,26 @@ import os
 import sqlite3
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC
 from decimal import Decimal
 from pathlib import Path
+from threading import Barrier, Event
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from auction_watch.config import Settings
 from auction_watch.main import create_app
 from auction_watch.persistence.database import Database, sqlite_path
-from auction_watch.persistence.migrations import upgrade_head
+from auction_watch.persistence.migrations import alembic_head, upgrade_head
 from auction_watch.persistence.models import ProfileSourceRow
 from auction_watch.persistence.repository import (
     ProfileAlreadyExistsError,
     ProfileNotFoundError,
+    ProfilePersistenceError,
     ProfileRepository,
     ProfileRevisionConflictError,
 )
@@ -75,9 +79,11 @@ def test_empty_database_migrates_and_upgrade_is_idempotent(tmp_path: Path) -> No
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        revision = connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
     assert {"profiles", "profile_sources", "alembic_version"} <= tables
-    assert revision == "0001_profiles"
+    assert revision == alembic_head()
 
 
 def test_sqlite_pragmas_are_configured(database: Database) -> None:
@@ -107,6 +113,43 @@ def test_profile_repository_round_trip_and_order(database: Database) -> None:
     assert loaded.profile.schedule.timezone == "America/Montevideo"
     assert loaded.created_at.tzinfo == UTC
     assert [item.profile.id for item in repository.list()] == ["vinilos-rock"]
+
+
+def test_empty_price_filter_is_not_persisted(database: Database) -> None:
+    repository = ProfileRepository(database)
+
+    empty_dict = make_profile(price_filter={})
+    empty_model = make_profile(price_filter=PriceFilter())
+    assert empty_dict.price_filter is None
+    assert empty_model.price_filter is None
+
+    created = repository.create(empty_dict)
+    assert created.profile.price_filter is None
+    with database.engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT price_maximum, price_currency, price_on_unknown "
+                "FROM profiles WHERE id = :id"
+            ),
+            {"id": created.profile.id},
+        ).one()
+    assert stored == (None, None, None)
+
+
+def test_sqlite_json_preserves_unicode_without_ascii_escaping(database: Database) -> None:
+    ProfileRepository(database).create(make_profile())
+
+    with sqlite3.connect(sqlite_path(database.data_dir)) as connection:
+        stored = connection.execute(
+            "SELECT exclude_keywords, boost_keywords FROM profiles "
+            "WHERE id = 'vinilos-rock'"
+        ).fetchone()
+
+    assert stored is not None
+    exclude_keywords, boost_keywords = stored
+    assert "réplica" in exclude_keywords
+    assert "\\u00e9" not in exclude_keywords
+    assert '"Pescado Rabioso":8' in boost_keywords
 
 
 def test_replace_increments_revision_and_delete_requires_revision(database: Database) -> None:
@@ -152,6 +195,118 @@ def test_revision_conflict_does_not_modify_any_row(database: Database) -> None:
     assert current.profile.name == created.profile.name
 
 
+def test_concurrent_replaces_have_one_winner_and_keep_its_sources(
+    database: Database,
+) -> None:
+    repository = ProfileRepository(database)
+    repository.create(make_profile(source_ids=["remates"]))
+    start = Barrier(2)
+    replacements = {
+        "Perfil A": ["bavastro"],
+        "Perfil B": ["castells"],
+    }
+
+    def replace(name: str) -> tuple[str, str]:
+        start.wait()
+        try:
+            repository.replace(
+                make_profile(name=name, source_ids=replacements[name]),
+                expected_revision=1,
+            )
+        except ProfileRevisionConflictError:
+            return ("conflict", name)
+        return ("success", name)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(replace, replacements))
+
+    winners = [name for status, name in outcomes if status == "success"]
+    assert len(winners) == 1
+    stored = repository.get("vinilos-rock")
+    assert stored is not None
+    assert stored.revision == 2
+    assert stored.profile.name == winners[0]
+    assert stored.profile.source_ids == tuple(replacements[winners[0]])
+
+
+def test_concurrent_deletes_have_one_winner(database: Database) -> None:
+    repository = ProfileRepository(database)
+    repository.create(make_profile())
+    start = Barrier(2)
+
+    def delete() -> str:
+        start.wait()
+        try:
+            repository.delete("vinilos-rock", expected_revision=1)
+        except (ProfileNotFoundError, ProfileRevisionConflictError):
+            return "not-success"
+        return "success"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _index: delete(), range(2)))
+
+    assert outcomes.count("success") == 1
+    assert repository.get("vinilos-rock") is None
+
+
+def test_read_snapshot_never_mixes_profile_and_sources(
+    database: Database,
+) -> None:
+    repository = ProfileRepository(database)
+    repository.create(make_profile(name="Perfil viejo", source_ids=["remates"]))
+    profile_selected = Event()
+    release_reader = Event()
+    paused = False
+    read_result: list[object] = []
+
+    def pause_first_profile_select(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        nonlocal paused
+        if not paused and statement.lstrip().upper().startswith("SELECT"):
+            if "from profiles" in statement.lower():
+                paused = True
+                profile_selected.set()
+                release_reader.wait(timeout=5)
+
+    event.listen(database.engine, "after_cursor_execute", pause_first_profile_select)
+
+    def read() -> None:
+        try:
+            loaded = repository.get("vinilos-rock")
+            read_result.append(loaded)
+        except BaseException as exc:  # pragma: no cover - diagnostic propagation
+            read_result.append(exc)
+
+    reader = ThreadPoolExecutor(max_workers=1)
+    future = reader.submit(read)
+    try:
+        assert profile_selected.wait(timeout=5)
+        repository.replace(
+            make_profile(name="Perfil nuevo", source_ids=["castells"]),
+            expected_revision=1,
+        )
+    finally:
+        release_reader.set()
+        future.result(timeout=5)
+        reader.shutdown(wait=True)
+        event.remove(database.engine, "after_cursor_execute", pause_first_profile_select)
+
+    assert len(read_result) == 1
+    loaded = read_result[0]
+    assert not isinstance(loaded, BaseException)
+    assert loaded is not None
+    assert (loaded.profile.name, loaded.profile.source_ids) in {
+        ("Perfil viejo", ("remates",)),
+        ("Perfil nuevo", ("castells",)),
+    }
+
+
 def test_source_insert_failure_rolls_back_profile(
     monkeypatch: pytest.MonkeyPatch, database: Database
 ) -> None:
@@ -164,6 +319,42 @@ def test_source_insert_failure_rolls_back_profile(
     with pytest.raises(RuntimeError):
         repository.create(make_profile())
     assert repository.get("vinilos-rock") is None
+
+
+def test_replace_source_failure_rolls_back_profile_and_revision(
+    monkeypatch: pytest.MonkeyPatch, database: Database
+) -> None:
+    repository = ProfileRepository(database)
+    repository.create(make_profile(name="Perfil original", source_ids=["remates"]))
+
+    def fail_insert(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated source failure")
+
+    monkeypatch.setattr(repository, "_insert_sources", fail_insert)
+    with pytest.raises(RuntimeError):
+        repository.replace(
+            make_profile(name="No debe persistir", source_ids=["castells"]),
+            expected_revision=1,
+        )
+
+    current = repository.get("vinilos-rock")
+    assert current is not None
+    assert current.revision == 1
+    assert current.profile.name == "Perfil original"
+    assert current.profile.source_ids == ("remates",)
+
+
+def test_unrelated_integrity_error_is_not_reported_as_duplicate(
+    monkeypatch: pytest.MonkeyPatch, database: Database
+) -> None:
+    repository = ProfileRepository(database)
+
+    def fail_insert(*_args: object, **_kwargs: object) -> None:
+        raise IntegrityError("INSERT", {}, RuntimeError("not a duplicate"))
+
+    monkeypatch.setattr(repository, "_insert_sources", fail_insert)
+    with pytest.raises(ProfilePersistenceError):
+        repository.create(make_profile())
 
 
 def test_profile_sources_cascade_on_delete(database: Database) -> None:

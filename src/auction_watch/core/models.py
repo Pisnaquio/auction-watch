@@ -274,6 +274,23 @@ class SearchProfile(DomainModel):
     notification_mode: Literal["disabled", "matches", "matches_or_failure"] = "disabled"
     schedule: SearchSchedule = Field(default_factory=SearchSchedule)
 
+    @field_validator("price_filter", mode="before")
+    @classmethod
+    def canonicalize_empty_price_filter(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, PriceFilter):
+            return None if value.maximum is None and value.currency is None else value
+        if isinstance(value, dict):
+            allowed = {"maximum", "currency", "on_unknown"}
+            if (
+                set(value).issubset(allowed)
+                and value.get("maximum") is None
+                and value.get("currency") is None
+            ):
+                return None
+        return value
+
     @field_validator("id", mode="before")
     @classmethod
     def validate_id(cls, value: object) -> str:
