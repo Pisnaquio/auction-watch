@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Literal
-from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -22,7 +21,7 @@ from pydantic import (
 from auction_watch.core.frozen import FrozenDict
 from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
 from auction_watch.core.normalization import dedupe_terms, normalize_term
-from auction_watch.core.validation import canonical_slug, external_id
+from auction_watch.core.validation import canonical_slug, external_id, http_url
 
 _CURRENCY = re.compile(r"[A-Z]{3}\Z")
 _SEARCH_FIELDS = frozenset({"title", "description", "category"})
@@ -62,19 +61,7 @@ def _nonempty_text(value: object, label: str) -> str:
 
 
 def _http_url(value: object, label: str, *, optional: bool = False) -> str | None:
-    if value is None and optional:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"{label} must be an absolute HTTP or HTTPS URL")
-    cleaned = value.strip()
-    if optional and not cleaned:
-        return None
-    parsed = urlsplit(cleaned)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError(f"{label} must be an absolute HTTP or HTTPS URL")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError(f"{label} must not contain credentials")
-    return cleaned
+    return http_url(value, label, optional=optional)
 
 
 def _currency(value: object) -> str | None:
@@ -134,9 +121,7 @@ class AuctionGroup(DomainModel):
     _validate_title = field_validator("title", mode="before")(
         lambda value: _nonempty_text(value, "title")
     )
-    _validate_url = field_validator("url", mode="before")(
-        lambda value: _http_url(value, "url")
-    )
+    _validate_url = field_validator("url", mode="before")(lambda value: _http_url(value, "url"))
 
 
 class AuctionLot(DomainModel):
@@ -262,6 +247,10 @@ class SearchSchedule(DomainModel):
 class SearchProfile(DomainModel):
     id: str
     name: str
+    kind: Literal["system", "user"] = "user"
+    locked: StrictBool = False
+    seed_key: str | None = None
+    seed_version: StrictInt = 0
     enabled: StrictBool = True
     keywords_any: tuple[str, ...] = ()
     keywords_all: tuple[str, ...] = ()
@@ -313,9 +302,7 @@ class SearchProfile(DomainModel):
     @classmethod
     def normalize_sources(cls, value: object) -> tuple[str, ...]:
         values = _ordered_strings(value, "source_ids")
-        return tuple(
-            dict.fromkeys(canonical_slug(source_id, "source_id") for source_id in values)
-        )
+        return tuple(dict.fromkeys(canonical_slug(source_id, "source_id") for source_id in values))
 
     @field_validator("boost_keywords", mode="before")
     @classmethod
@@ -381,6 +368,11 @@ class SearchProfile(DomainModel):
         boosts = {normalize_term(term) for term in self.boost_keywords}
         if boosts & excluded:
             raise ValueError("boosts and exclusions must not overlap")
+        if self.kind == "system":
+            if not self.locked or not self.seed_key or self.seed_version < 1:
+                raise ValueError("system profiles require locked seed metadata")
+        elif self.locked or self.seed_key is not None or self.seed_version != 0:
+            raise ValueError("user profiles cannot be locked or seeded")
         return self
 
 

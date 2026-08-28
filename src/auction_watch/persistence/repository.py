@@ -33,6 +33,14 @@ class ProfileRevisionConflictError(ProfileRepositoryError):
     """Raised when an optimistic revision does not match the stored revision."""
 
 
+class SystemProfileImmutableError(ProfileRepositoryError):
+    """Raised when protected system identity metadata would change."""
+
+
+class SystemProfileDeleteError(ProfileRepositoryError):
+    """Raised when a locked system profile is deleted."""
+
+
 class ProfilePersistenceError(ProfileRepositoryError):
     """Raised when SQLite rejects a non-conflict profile write."""
 
@@ -83,6 +91,10 @@ class ProfileRepository:
         profile = SearchProfile(
             id=row.id,
             name=row.name,
+            kind=row.kind,
+            locked=row.locked,
+            seed_key=row.seed_key,
+            seed_version=row.seed_version,
             enabled=row.enabled,
             keywords_any=row.keywords_any,
             keywords_all=row.keywords_all,
@@ -110,6 +122,10 @@ class ProfileRepository:
         price_filter = profile.price_filter
         return {
             "name": profile.name,
+            "kind": profile.kind,
+            "locked": profile.locked,
+            "seed_key": profile.seed_key,
+            "seed_version": profile.seed_version,
             "enabled": profile.enabled,
             "keywords_any": list(profile.keywords_any),
             "keywords_all": list(profile.keywords_all),
@@ -139,6 +155,10 @@ class ProfileRepository:
             created_at=now,
             updated_at=now,
             name=profile.name,
+            kind=profile.kind,
+            locked=profile.locked,
+            seed_key=profile.seed_key,
+            seed_version=profile.seed_version,
             enabled=profile.enabled,
             keywords_any=[],
             keywords_all=[],
@@ -178,20 +198,48 @@ class ProfileRepository:
     def replace(self, profile: SearchProfile, expected_revision: int) -> StoredProfile:
         now = _utc_now()
         with self._database.sessions.begin() as session:
+            current = session.get(ProfileRow, profile.id)
+            if current is None:
+                if profile.kind == "system":
+                    renamed = session.scalar(
+                        select(ProfileRow).where(
+                            ProfileRow.kind == "system",
+                            ProfileRow.seed_key == profile.seed_key,
+                        )
+                    )
+                    if renamed is not None:
+                        raise SystemProfileImmutableError(renamed.id)
+                raise ProfileNotFoundError(profile.id)
+            if current.kind == "system" and (
+                profile.kind != "system"
+                or not profile.locked
+                or profile.seed_key != current.seed_key
+                or profile.id != current.id
+            ):
+                raise SystemProfileImmutableError(profile.id)
+            if current.kind == "system":
+                current_profile = self._row_to_stored(session, current).profile
+                unchanged_seed = profile.model_copy(update={"enabled": current_profile.enabled})
+                if profile.seed_version < current_profile.seed_version or (
+                    profile.seed_version == current_profile.seed_version
+                    and unchanged_seed != current_profile
+                ):
+                    raise SystemProfileImmutableError(profile.id)
             values = self._profile_values(profile, now)
             values["revision"] = ProfileRow.revision + 1
-            result = cast(CursorResult[tuple[object, ...]], session.execute(
-                update(ProfileRow)
-                .where(
-                    ProfileRow.id == profile.id,
-                    ProfileRow.revision == expected_revision,
-                )
-                .values(**values)
-            ))
+            result = cast(
+                CursorResult[tuple[object, ...]],
+                session.execute(
+                    update(ProfileRow)
+                    .where(
+                        ProfileRow.id == profile.id,
+                        ProfileRow.revision == expected_revision,
+                    )
+                    .values(**values)
+                ),
+            )
             if result.rowcount != 1:
-                exists = session.scalar(
-                    select(ProfileRow.id).where(ProfileRow.id == profile.id)
-                )
+                exists = session.scalar(select(ProfileRow.id).where(ProfileRow.id == profile.id))
                 if exists is None:
                     raise ProfileNotFoundError(profile.id)
                 raise ProfileRevisionConflictError(profile.id)
@@ -210,15 +258,44 @@ class ProfileRepository:
 
     def delete(self, profile_id: str, expected_revision: int) -> None:
         with self._database.sessions.begin() as session:
-            result = cast(CursorResult[tuple[object, ...]], session.execute(
-                delete(ProfileRow).where(
-                    ProfileRow.id == profile_id,
-                    ProfileRow.revision == expected_revision,
-                )
-            ))
+            current = session.get(ProfileRow, profile_id)
+            if current is not None and current.kind == "system":
+                raise SystemProfileDeleteError(profile_id)
+            result = cast(
+                CursorResult[tuple[object, ...]],
+                session.execute(
+                    delete(ProfileRow).where(
+                        ProfileRow.id == profile_id,
+                        ProfileRow.revision == expected_revision,
+                    )
+                ),
+            )
             if result.rowcount == 1:
                 return
             exists = session.scalar(select(ProfileRow.id).where(ProfileRow.id == profile_id))
             if exists is None:
                 raise ProfileNotFoundError(profile_id)
             raise ProfileRevisionConflictError(profile_id)
+
+    def seed_system_profile(self, profile: SearchProfile) -> StoredProfile:
+        """Create or upgrade one system seed without reactivating a pause."""
+
+        if profile.kind != "system" or not profile.locked or not profile.seed_key:
+            raise SystemProfileImmutableError(profile.id)
+        existing = self.get(profile.id)
+        if existing is None:
+            return self.create(profile)
+        if existing.profile.kind != "system" or existing.profile.seed_key != profile.seed_key:
+            raise SystemProfileImmutableError(profile.id)
+        if existing.profile.seed_version >= profile.seed_version:
+            return existing
+        upgraded = profile.model_copy(update={"enabled": existing.profile.enabled})
+        return self.replace(upgraded, expected_revision=existing.revision)
+
+    def clone(self, profile_id: str, new_id: str, name: str | None = None) -> StoredProfile:
+        from auction_watch.profiles.seed import clone_as_user
+
+        existing = self.get(profile_id)
+        if existing is None:
+            raise ProfileNotFoundError(profile_id)
+        return self.create(clone_as_user(existing.profile, new_id, name))
