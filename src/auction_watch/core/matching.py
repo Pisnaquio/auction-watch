@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from auction_watch.core.models import AuctionLot, MatchResult, SearchProfile
+from auction_watch.core.models import AuctionLot, ContextRule, MatchResult, SearchProfile
 from auction_watch.core.normalization import contains_term, normalize_term, normalize_text
 
 ANY_SCORE = 2
@@ -30,13 +30,26 @@ def _field_texts(lot: AuctionLot) -> dict[str, str]:
     }
 
 
-def _find_rule(term: str, fields: dict[str, str]) -> _FoundRule | None:
+def _find_rule(
+    term: str, fields: dict[str, str], context_rules: tuple[ContextRule, ...] = ()
+) -> _FoundRule | None:
     matched_fields = tuple(
-        field_name
-        for field_name in _SEARCH_FIELDS
-        if contains_term(fields[field_name], term)
+        field_name for field_name in _SEARCH_FIELDS if contains_term(fields[field_name], term)
     )
-    return _FoundRule(term=term, fields=matched_fields) if matched_fields else None
+    if not matched_fields:
+        return None
+    full_text = " ".join(fields.values())
+    rule = next(
+        (rule for rule in context_rules if normalize_term(rule.term) == normalize_term(term)), None
+    )
+    if rule is not None:
+        if rule.required_any and not any(
+            contains_term(full_text, item) for item in rule.required_any
+        ):
+            return None
+        if any(contains_term(full_text, item) for item in rule.excluded_any):
+            return None
+    return _FoundRule(term=term, fields=matched_fields)
 
 
 def _add_found(
@@ -149,7 +162,7 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
     found: dict[str, _FoundRule] = {}
     excluded: dict[str, _FoundRule] = {}
     for term in profile.exclude_keywords:
-        rule = _find_rule(term, fields)
+        rule = _find_rule(term, fields, profile.context_rules)
         if rule is not None:
             _add_found(excluded, rule)
     if excluded:
@@ -171,19 +184,19 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
     all_found: list[_FoundRule] = []
     exact_found: list[_FoundRule] = []
     for term in profile.keywords_any:
-        rule = _find_rule(term, fields)
+        rule = _find_rule(term, fields, profile.context_rules)
         if rule is not None:
             any_found.append(rule)
             _add_found(found, rule)
     for term in profile.keywords_all:
-        rule = _find_rule(term, fields)
+        rule = _find_rule(term, fields, profile.context_rules)
         if rule is None:
             all_missing.append(term)
         else:
             all_found.append(rule)
             _add_found(found, rule)
     for phrase in profile.exact_phrases:
-        rule = _find_rule(phrase, fields)
+        rule = _find_rule(phrase, fields, profile.context_rules)
         if rule is not None:
             exact_found.append(rule)
             _add_found(found, rule)
@@ -215,7 +228,7 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
     boosts_found: list[_FoundRule] = []
     boost_weights: dict[str, int] = {}
     for term, weight in profile.boost_keywords.items():
-        rule = _find_rule(term, fields)
+        rule = _find_rule(term, fields, profile.context_rules)
         if rule is not None:
             boosts_found.append(rule)
             boost_weights[term] = weight
@@ -226,10 +239,15 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
     score += sum(EXACT_PHRASE_SCORE for _ in exact_found)
     score += sum(boost_weights.values())
     score += sum(
-        TITLE_BONUS
-        for rule in (*any_found, *all_found, *exact_found)
-        if "title" in rule.fields
+        TITLE_BONUS for rule in (*any_found, *all_found, *exact_found) if "title" in rule.fields
     )
+
+    risk_score = sum(
+        weight
+        for term, weight in profile.risk_keywords.items()
+        if _find_rule(term, fields, profile.context_rules) is not None
+    )
+    score = max(0, score - risk_score)
 
     price_rejection = _price_rejection(profile, lot)
     matched_fields = _found_fields(found)
@@ -272,9 +290,7 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
         else ""
     )
     title_explanation = (
-        f" Bonus de título aplicado a {_human_list(title_terms)}."
-        if title_terms
-        else ""
+        f" Bonus de título aplicado a {_human_list(title_terms)}." if title_terms else ""
     )
     return _result(
         profile,

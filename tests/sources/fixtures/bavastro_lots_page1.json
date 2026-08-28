@@ -1,0 +1,1 @@
+{"results":[{"id":9001,"base_price":"1000.00","best_price":"1200.00","number_of_bids":2,"lot":{"description":"Consola retro","auction":{"end_date":"2026-09-10T20:00:00-03:00"},"currency":{"prefix":"$"},"images":[{"order":1,"url":"https://img.example/retro.jpg"}]}}],"next":"https://api-parseo.bavastronline.com/published_auctions/123/lots/published/?page=2&page_size=50"}

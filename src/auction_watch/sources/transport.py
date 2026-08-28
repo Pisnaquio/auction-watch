@@ -35,8 +35,22 @@ def decode_response(response: Any) -> Any:
         return response
     json_method = getattr(response, "json", None)
     if callable(json_method):
-        return json_method()
-    raise ValueError("transport response is not JSON-decodable")
+        try:
+            return json_method()
+        except (TypeError, ValueError):
+            pass
+    text = getattr(response, "text", None)
+    if isinstance(text, str):
+        return text
+    content = getattr(response, "content", None)
+    if isinstance(content, bytes):
+        return content.decode("utf-8")
+    raise ValueError("transport response is not JSON, text, or XML-decodable")
 
 
-__all__ = ["HttpxTransport", "Transport", "decode_response"]
+def response_headers(response: Any) -> Mapping[str, str]:
+    headers = getattr(response, "headers", None)
+    return headers if isinstance(headers, Mapping) else {}
+
+
+__all__ = ["HttpxTransport", "Transport", "decode_response", "response_headers"]

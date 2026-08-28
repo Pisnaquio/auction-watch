@@ -17,6 +17,7 @@ from auction_watch.persistence.migrations import alembic_head, upgrade_head
 from auction_watch.persistence.operational_repository import (
     OperationalPersistenceError,
     OperationalRepository,
+    ReconciliationReceiptError,
     UserStateRevisionConflict,
 )
 from auction_watch.persistence.repository import (
@@ -39,6 +40,7 @@ __all__ = [
     "NotificationOutboxRecord",
     "OperationalPersistenceError",
     "OperationalRepository",
+    "ReconciliationReceiptError",
     "OpportunityLifecycle",
     "ProfileAlreadyExistsError",
     "ProfileNotFoundError",

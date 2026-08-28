@@ -19,6 +19,7 @@ The migration chain is:
   results, coverage receipts, snapshots, opportunities, profile matches, user
   states, and notification outbox;
 - `0003_profile_kinds`: system/user profile metadata and versioned seed fields.
+- `0004_contextual_profile_rules`: reusable risk weights and context gates.
 
 Upgrades are safe to run repeatedly. Each engine enables foreign keys, WAL,
 busy timeout, and explicit transaction boundaries. All timestamps are stored

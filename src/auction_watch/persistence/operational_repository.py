@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auction_watch.core.identity import encode_opportunity_key
@@ -44,6 +45,10 @@ class OperationalPersistenceError(RuntimeError):
 
 class UserStateRevisionConflict(OperationalPersistenceError):
     """Raised when an optimistic user-state update is stale."""
+
+
+class ReconciliationReceiptError(OperationalPersistenceError):
+    """Raised when a group cannot be reconciled from a matching coverage receipt."""
 
 
 def _utc_now() -> datetime:
@@ -181,18 +186,33 @@ class OperationalRepository:
         group_id: str,
         lots: list[LotRecord],
         *,
-        authoritative: bool,
+        authoritative: bool | None = None,
         observed_at: datetime | None = None,
     ) -> list[OpportunityLifecycle]:
-        """Upsert one group and retire only omitted lots on authoritative proof."""
+        """Upsert one group using only its persisted coverage receipt as authority."""
 
         observed = observed_at or _utc_now()
-        lot_ids = {lot.lot_id for lot in lots}
+        identities = [(lot.source_id, lot.auction_id, lot.lot_id) for lot in lots]
+        if any(lot.source_id != source_id or lot.auction_id != group_id for lot in lots):
+            raise ValueError("all lots must belong to the reconciled source and group")
+        if len(identities) != len(set(identities)):
+            raise ValueError("reconciliation lots must not contain duplicate identities")
         with self._database.sessions.begin() as session:
+            receipt = session.get(CoverageReceiptRow, (run_id, source_id, group_id))
+            if receipt is None:
+                raise ReconciliationReceiptError(
+                    f"missing coverage receipt for {run_id}/{source_id}/{group_id}"
+                )
+            receipt_authoritative = (
+                receipt.status == "complete"
+                and receipt.inventory_authoritative
+                and receipt.lot_count == len(lots)
+            )
+            lot_ids = {lot.lot_id for lot in lots}
             for lot in lots:
                 self._upsert_lot(session, lot)
                 self._touch_lifecycle(session, lot, run_id, observed)
-            if authoritative:
+            if receipt_authoritative:
                 rows = session.scalars(
                     select(AuctionLotRow).where(
                         AuctionLotRow.source_id == source_id,
@@ -221,8 +241,10 @@ class OperationalRepository:
                 )
             )
             return
+        already_counted = row.last_present_run_id == run_id or row.last_absence_run_id == run_id
         row.last_seen_at = observed
-        row.seen_count += 1
+        if not already_counted:
+            row.seen_count += 1
         row.active = True
         row.removed_at = None
         row.last_present_run_id = run_id
@@ -232,7 +254,7 @@ class OperationalRepository:
         session: Session, lot: AuctionLotRow, run_id: str, observed: datetime
     ) -> None:
         row = session.get(OpportunityRow, (lot.source_id, lot.auction_id, lot.lot_id))
-        if row is not None and row.active:
+        if row is not None and row.active and row.last_absence_run_id != run_id:
             row.active = False
             row.removed_at = observed
             row.last_absence_run_id = run_id
@@ -317,18 +339,29 @@ class OperationalRepository:
             )
 
     def enqueue_notification(self, item: NotificationOutboxRecord) -> int:
-        with self._database.sessions.begin() as session:
-            existing = session.scalar(
-                select(NotificationOutboxRow).where(
-                    NotificationOutboxRow.dedupe_key == item.dedupe_key
+        try:
+            with self._database.sessions.begin() as session:
+                existing = session.scalar(
+                    select(NotificationOutboxRow).where(
+                        NotificationOutboxRow.dedupe_key == item.dedupe_key
+                    )
                 )
-            )
-            if existing is not None:
-                return int(existing.id)
-            row = NotificationOutboxRow(**item.model_dump())
-            session.add(row)
-            session.flush()
-            return int(row.id)
+                if existing is not None:
+                    return int(existing.id)
+                row = NotificationOutboxRow(**item.model_dump())
+                session.add(row)
+                session.flush()
+                return int(row.id)
+        except IntegrityError:
+            with self._database.sessions.begin() as session:
+                existing = session.scalar(
+                    select(NotificationOutboxRow).where(
+                        NotificationOutboxRow.dedupe_key == item.dedupe_key
+                    )
+                )
+                if existing is not None:
+                    return int(existing.id)
+            raise OperationalPersistenceError("notification enqueue failed") from None
 
     def record_snapshot(
         self,

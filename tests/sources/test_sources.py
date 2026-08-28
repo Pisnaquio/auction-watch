@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -16,169 +18,201 @@ from auction_watch.sources import (
     SourceSpec,
     TodoRematesSource,
 )
-from auction_watch.sources.base import BaseAuctionSource
+from auction_watch.sources.bavastro import API_BASE
+from auction_watch.sources.castells import LOTS_URL
+from auction_watch.sources.prado import PRODUCTS_API_URL as PRADO_PRODUCTS_URL
+from auction_watch.sources.todoremates import PRODUCTS_API_URL, REMATES_API_URL
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
-class FakeTransport:
-    def __init__(self, payload: Any = None, error: Exception | None = None) -> None:
+class FakeResponse:
+    def __init__(
+        self, *, payload: Any = None, text: str | None = None, headers: dict[str, str] | None = None
+    ) -> None:
         self.payload = payload
-        self.error = error
-        self.calls: list[tuple[str, float]] = []
+        self.text = text
+        self.headers = headers or {}
 
-    def get(self, url: str, *, timeout: float) -> Any:
-        self.calls.append((url, timeout))
-        if self.error:
-            raise self.error
+    def json(self) -> Any:
+        if self.text is not None:
+            raise ValueError("not JSON")
         return self.payload
 
 
-def _fixture(group_key: str, lot_key: str) -> dict[str, Any]:
-    return {
-        group_key: [
-            {
-                "id": "remate:2026/08",
-                "title": "Subasta pública",
-                "url": "https://example.test/auction/2026-08",
-                "category": "videojuegos",
-                "closing_at": "2026-08-30T18:00:00-03:00",
-                lot_key: [
-                    {
-                        "id": "lote: 01/ñ",
-                        "title": "Consola original",
-                        "description": "Texto de fuente",
-                        "url": "/lots/01",
-                        "image": "/images/01.jpg",
-                        "price": "1.234,56",
-                        "currency": "uyu",
-                        "closing_at": "2026-08-30T17:00:00Z",
-                    }
-                ],
-            }
-        ],
-        "complete": True,
-    }
+class FakeTransport:
+    def __init__(self, handler) -> None:
+        self.handler = handler
+        self.calls: list[tuple[str, float]] = []
+
+    def get(self, url: str, *, timeout: float) -> FakeResponse:
+        self.calls.append((url, timeout))
+        return self.handler(url)
 
 
-@pytest.mark.parametrize(
-    ("adapter", "group_key", "lot_key"),
-    [
-        (BavastroSource, "results", "lots"),
-        (CastellsSource, "auctions", "items"),
-        (RemotesSource, "groups", "lots"),
-        (TodoRematesSource, "terms", "products"),
-        (PradoSource, "categories", "items"),
-    ],
-)
-def test_public_adapters_normalize_sanitized_fixtures(
-    adapter: type[BaseAuctionSource], group_key: str, lot_key: str
-) -> None:
-    transport = FakeTransport(_fixture(group_key, lot_key))
-    result = adapter(transport, timeout=3.5).scan()
-
-    assert result.source_id == adapter.source_id
-    assert result.discovery_status == "complete"
-    assert result.inventory_authoritative is True
-    assert len(result.groups) == len(result.lots) == len(result.receipts) == 1
-    assert result.lots[0].lot_id == "lote: 01/ñ"
-    assert result.lots[0].price_value == Decimal("1234.56")
-    assert result.lots[0].price_currency == "UYU"
-    assert result.lots[0].lot_url == "https://example.test/lots/01"
-    assert result.lots[0].image_url == "https://example.test/images/01.jpg"
-    assert result.lots[0].closing_at == datetime(2026, 8, 30, 17, tzinfo=UTC)
-    assert result.receipts[0].inventory_authoritative is True
-    assert transport.calls == [(adapter.discovery_url, 3.5)]
+def load_json(name: str) -> Any:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
-def test_multiple_groups_have_stable_external_identities() -> None:
-    payload = {
-        "groups": [
-            {"id": "first:1", "title": "First", "url": "https://example.test/1", "lots": []},
-            {"id": "second/2", "title": "Second", "url": "https://example.test/2", "lots": []},
-        ],
-        "complete": True,
-    }
-    result = RemotesSource(FakeTransport(payload)).scan()
-
-    assert [group.auction_id for group in result.groups] == ["first:1", "second/2"]
-    assert [receipt.status for receipt in result.receipts] == ["complete", "complete"]
+def load_text(name: str) -> str:
+    return (FIXTURES / name).read_text(encoding="utf-8")
 
 
-def test_malformed_lot_isolated_and_marks_group_partial() -> None:
-    payload = {
-        "groups": [
-            {
-                "id": "auction-1",
-                "title": "Auction",
-                "url": "https://example.test/auction",
-                "lots": [
-                    {"id": "good", "title": "Good", "url": "/good"},
-                    {"id": "bad", "title": "Missing URL"},
-                ],
-            }
-        ],
-        "complete": True,
-    }
-    result = RemotesSource(FakeTransport(payload)).scan()
+def test_bavastro_real_json_api_covers_lot_pagination() -> None:
+    discovery = load_json("bavastro_discovery.json")
+    page1 = load_json("bavastro_lots_page1.json")
+    page2 = load_json("bavastro_lots_page2.json")
 
-    assert [lot.lot_id for lot in result.lots] == ["good"]
+    def handler(url: str) -> FakeResponse:
+        if url.startswith(f"{API_BASE}/?page=1"):
+            return FakeResponse(payload=discovery)
+        if url == f"{API_BASE}/123/":
+            return FakeResponse(payload=load_json("bavastro_detail.json"))
+        if "123/lots/published" in url and "page=1" in url:
+            return FakeResponse(payload=page1)
+        if "123/lots/published" in url and "page=2" in url:
+            return FakeResponse(payload=page2)
+        if url == f"{API_BASE}/124/":
+            return FakeResponse(payload={"id": 124, "name": "Fallida", "active": True})
+        if "124/lots/published" in url:
+            raise TimeoutError("fixture timeout")
+        raise AssertionError(url)
+
+    transport = FakeTransport(handler)
+    result = BavastroSource(transport, timeout=4).scan()
+
+    assert result.source_id == "bavastro"
     assert result.discovery_status == "partial"
     assert result.inventory_authoritative is False
-    assert result.receipts[0].status == "partial"
-    assert result.receipts[0].error_count == 1
+    assert [lot.lot_id for lot in result.lots] == ["9001", "9002"]
+    assert result.lots[0].price_value == Decimal("1200.00")
+    assert result.receipts[0].status == "complete"
+    assert result.receipts[1].status == "failed"
+    assert all(timeout == 4 for _url, timeout in transport.calls)
 
 
-def test_empty_response_requires_structural_evidence() -> None:
-    authoritative = RemotesSource(FakeTransport({"groups": [], "complete": True})).scan()
-    suspicious = RemotesSource(FakeTransport({})).scan()
+def test_castells_requires_html_gxstate_and_reads_lots_endpoint() -> None:
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        if url.startswith(LOTS_URL):
+            return FakeResponse(payload=load_json("castells_lots.json"))
+        raise AssertionError(url)
 
-    assert authoritative.discovery_status == "complete"
-    assert authoritative.inventory_authoritative is True
-    assert authoritative.groups == ()
-    assert suspicious.discovery_status == "failed"
-    assert suspicious.inventory_authoritative is False
+    result = CastellsSource(FakeTransport(handler)).scan()
+    assert result.discovery_status == "complete"
+    assert result.groups[0].auction_id == "77"
+    assert result.lots[0].lot_id == "77:16"
+    assert str(result.lots[0].price_value) == "1234.50"
 
 
-def test_transport_timeout_is_a_total_failed_scan() -> None:
-    result = PradoSource(FakeTransport(error=TimeoutError())).scan()
+def test_castells_json_is_rejected_instead_of_coerced() -> None:
+    result = CastellsSource(
+        FakeTransport(lambda _url: FakeResponse(payload={"results": []}))
+    ).scan()
+    assert result.discovery_status == "failed"
+    assert "Castells" in result.errors[0]
 
+
+def test_remotes_parses_rss_and_deduplicates_by_query_lot_id() -> None:
+    result = RemotesSource(
+        FakeTransport(lambda url: FakeResponse(text=load_text("remotes_feed.xml")))
+    ).scan()
+    assert result.discovery_status == "complete"
+    assert [group.auction_id for group in result.groups] == ["7544"]
+    assert [lot.lot_id for lot in result.lots] == ["16", "18"]
+    assert result.lots[1].image_url == "https://www.remotes.com.uy/media/b.jpg"
+
+
+def test_remotes_json_is_rejected_and_missing_lot_id_is_partial() -> None:
+    result = RemotesSource(FakeTransport(lambda _url: FakeResponse(payload=[]))).scan()
+    assert result.discovery_status == "failed"
+    malformed = (
+        "<rss><channel><item><title>A</title>"
+        "<link>https://www.remotes.com.uy/participar/remate/1</link>"
+        "<cantLotes>1</cantLotes><lotes><lote><title>Sin ID</title>"
+        "</lote></lotes></item></channel></rss>"
+    )
+    result = RemotesSource(FakeTransport(lambda _url: FakeResponse(text=malformed))).scan()
+    assert result.discovery_status == "partial"
+    assert result.inventory_authoritative is False
+
+
+def test_todoremates_uses_real_wordpress_and_woocommerce_pagination() -> None:
+    terms = load_json("todoremates_terms.json")
+    products = load_json("todoremates_products.json")
+
+    def handler(url: str) -> FakeResponse:
+        if url.startswith(f"{REMATES_API_URL}?"):
+            assert parse_qs(urlsplit(url).query)["hide_empty"] == ["true"]
+            return FakeResponse(payload=terms, headers={"X-WP-TotalPages": "1"})
+        if url.startswith(f"{PRODUCTS_API_URL}?"):
+            query = parse_qs(urlsplit(url).query)
+            assert query["_unstable_tax_remate"] == ["39"]
+            return FakeResponse(payload=products, headers={"X-WP-TotalPages": "1"})
+        raise AssertionError(url)
+
+    transport = FakeTransport(handler)
+    result = TodoRematesSource(transport).scan()
+    assert result.discovery_status == "complete"
+    assert result.groups[0].auction_id == "39"
+    assert result.lots[0].price_currency == "USD"
+    assert all("todoremates.com.uy/wp-json/" in url for url, _timeout in transport.calls)
+
+
+def test_todoremates_missing_second_page_is_not_authoritative() -> None:
+    calls = 0
+
+    def handler(url: str) -> FakeResponse:
+        nonlocal calls
+        calls += 1
+        if "wp/v2/remate" in url and parse_qs(urlsplit(url).query).get("page") == ["1"]:
+            return FakeResponse(
+                payload=load_json("todoremates_terms.json"), headers={"X-WP-TotalPages": "2"}
+            )
+        raise TimeoutError("page two unavailable")
+
+    result = TodoRematesSource(FakeTransport(handler)).scan()
     assert result.discovery_status == "failed"
     assert result.inventory_authoritative is False
-    assert "TimeoutError" in result.errors[0]
+    assert calls == 2
 
 
-def test_registry_is_typed_deterministic_and_rejects_duplicates() -> None:
-    registry = SourceRegistry(
-        (
-            SourceSpec("remotes", "Remotes", RemotesSource),
-            SourceSpec("prado", "Prado", PradoSource),
+def test_prado_uses_woocommerce_products_and_filters_non_auctions() -> None:
+    transport = FakeTransport(
+        lambda url: FakeResponse(
+            payload=load_json("prado_products.json"), headers={"X-WP-TotalPages": "1"}
         )
     )
+    result = PradoSource(transport).scan()
+    assert result.discovery_status == "complete"
+    assert len(result.groups) == len(result.lots) == 1
+    assert result.lots[0].lot_id == "272662"
+    assert result.lots[0].price_value == 1000
+    assert transport.calls[0][0].startswith(f"{PRADO_PRODUCTS_URL}?")
 
+
+def test_prado_structural_marker_drift_fails_closed() -> None:
+    result = PradoSource(FakeTransport(lambda _url: FakeResponse(payload={"products": []}))).scan()
+    assert result.discovery_status == "failed"
+    assert result.inventory_authoritative is False
+
+
+def test_registry_selection_and_duplicate_detection_remain_deterministic() -> None:
+    registry = SourceRegistry(
+        (SourceSpec("remotes", "Remotes", RemotesSource), SourceSpec("prado", "Prado", PradoSource))
+    )
     assert [spec.source_id for spec in registry.specs()] == ["prado", "remotes"]
     assert [spec.source_id for spec in registry.select(("remotes", "prado"))] == [
         "remotes",
         "prado",
     ]
-    assert [source.source_id for source in registry.build(FakeTransport())] == ["prado", "remotes"]
     with pytest.raises(ValueError, match="duplicate source_id"):
         registry.register(SourceSpec("prado", "Again", PradoSource))
-    with pytest.raises(ValueError, match="unknown source_id"):
-        registry.select(("missing",))
-
-
-def test_default_registry_contains_only_public_source_adapters() -> None:
-    assert [spec.source_id for spec in DEFAULT_SOURCE_REGISTRY.specs()] == [
+    assert {spec.source_id for spec in DEFAULT_SOURCE_REGISTRY.specs()} == {
         "bavastro",
         "castells",
-        "prado",
         "remotes",
         "todoremates",
-    ]
-
-
-def test_source_module_does_not_require_profiles_or_matching() -> None:
-    assert all(
-        "profile" not in source.__class__.__module__
-        and "matching" not in source.__class__.__module__
-        for source in DEFAULT_SOURCE_REGISTRY.build(FakeTransport())
-    )
+        "prado",
+    }

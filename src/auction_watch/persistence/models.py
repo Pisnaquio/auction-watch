@@ -58,6 +58,8 @@ class ProfileRow(Base):
     exact_phrases: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     exclude_keywords: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     boost_keywords: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
+    risk_keywords: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
+    context_rules: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     minimum_score: Mapped[int] = mapped_column(Integer, nullable=False)
     price_maximum: Mapped[str | None] = mapped_column(Text, nullable=True)
     price_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)

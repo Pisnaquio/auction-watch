@@ -42,6 +42,7 @@ _VALID_REJECTIONS = frozenset(
 __all__ = [
     "AuctionGroup",
     "AuctionLot",
+    "ContextRule",
     "MatchResult",
     "PriceFilter",
     "SearchProfile",
@@ -244,6 +245,29 @@ class SearchSchedule(DomainModel):
         return self
 
 
+class ContextRule(DomainModel):
+    """Reusable context gate for an otherwise matching profile term."""
+
+    term: str
+    required_any: tuple[str, ...] = ()
+    excluded_any: tuple[str, ...] = ()
+
+    _term = field_validator("term", mode="before")(
+        lambda value: _nonempty_text(value, "context rule term")
+    )
+
+    @field_validator("required_any", "excluded_any", mode="before")
+    @classmethod
+    def normalize_context_terms(cls, value: object) -> tuple[str, ...]:
+        values = _ordered_strings(value, "context rule terms")
+        if any(not item.strip() for item in values):
+            raise ValueError("context rule terms must not be empty")
+        normalized = [normalize_term(item) for item in values]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("context rule terms must not contain duplicates")
+        return tuple(values)
+
+
 class SearchProfile(DomainModel):
     id: str
     name: str
@@ -257,6 +281,8 @@ class SearchProfile(DomainModel):
     exact_phrases: tuple[str, ...] = ()
     exclude_keywords: tuple[str, ...] = ()
     boost_keywords: dict[str, StrictInt] = Field(default_factory=dict)
+    risk_keywords: dict[str, StrictInt] = Field(default_factory=dict)
+    context_rules: tuple[ContextRule, ...] = ()
     source_ids: tuple[str, ...]
     minimum_score: StrictInt = 0
     price_filter: PriceFilter | None = None
@@ -333,6 +359,57 @@ class SearchProfile(DomainModel):
     @classmethod
     def freeze_boosts(cls, value: dict[str, StrictInt]) -> dict[str, StrictInt]:
         return FrozenDict(value)
+
+    @field_validator("risk_keywords", mode="before")
+    @classmethod
+    def normalize_risks(cls, value: object) -> dict[str, int]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("risk_keywords must be a mapping")
+        result: dict[str, int] = {}
+        seen: set[str] = set()
+        for raw_key, raw_weight in value.items():
+            if not isinstance(raw_key, str) or not raw_key.strip():
+                raise ValueError("risk keyword keys must not be empty")
+            if (
+                isinstance(raw_weight, bool)
+                or not isinstance(raw_weight, int)
+                or not 0 < raw_weight <= 100
+            ):
+                raise ValueError("risk weights must be between 1 and 100")
+            key = " ".join(raw_key.strip().split())
+            normalized = normalize_term(key)
+            if normalized not in seen:
+                seen.add(normalized)
+                result[key] = raw_weight
+        return dict(sorted(result.items(), key=lambda item: normalize_term(item[0])))
+
+    @field_validator("risk_keywords")
+    @classmethod
+    def freeze_risks(cls, value: dict[str, StrictInt]) -> dict[str, StrictInt]:
+        return FrozenDict(value)
+
+    @field_validator("context_rules", mode="before")
+    @classmethod
+    def normalize_context_rules(cls, value: object) -> tuple[ContextRule, ...]:
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("context_rules must be a list or tuple")
+        parsed_rules: list[ContextRule] = []
+        for rule in value:
+            if isinstance(rule, ContextRule):
+                parsed_rules.append(rule)
+            elif isinstance(rule, dict):
+                parsed_rules.append(ContextRule(**rule))
+            else:
+                raise ValueError("context_rules values must be objects")
+        rules = tuple(parsed_rules)
+        normalized = [normalize_term(rule.term) for rule in rules]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("context rules must not contain duplicate terms")
+        return rules
 
     @field_validator("minimum_score")
     @classmethod

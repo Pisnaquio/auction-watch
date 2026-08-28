@@ -28,6 +28,11 @@ are immutable in identity and seed ownership, but remain pausable. The public
 it is versioned, idempotent, and can be cloned into a fully editable user
 profile without copying private runtime state.
 
+Profiles may also declare reusable `risk_keywords` with bounded score
+penalties and `context_rules` with required or excluded context terms. These
+rules express ambiguous terms such as controls, Nintendo Switch, Odyssey, and
+Pong without embedding a category-specific branch in the matcher.
+
 Terms are deduplicated case- and accent-insensitively while retaining their
 first readable spelling. Positive rules cannot overlap exclusions. Prices use
 finite non-negative `Decimal` values paired with an uppercase three-letter
@@ -47,7 +52,9 @@ matched term and no rejection details.
 `SourceScanResult` contains normalized groups/lots, source-level discovery
 status, explicit inventory authority, per-group `GroupReceipt`s, and sanitized
 errors. Empty or drifted payloads are not authoritative without structural
-evidence. Source adapters use injected transports and never perform matching,
+evidence. Bavastro and WordPress adapters prove pagination; Castells proves
+GXState plus lot response structure; Remotes proves an RSS channel and item
+structure. Source adapters use injected transports and never perform matching,
 persist rows, send mail, or write runtime files.
 
 Persistence contracts cover runs, source results, coverage, lifecycle,

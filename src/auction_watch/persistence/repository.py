@@ -12,7 +12,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from auction_watch.core.models import PriceFilter, SearchProfile, SearchSchedule
+from auction_watch.core.models import ContextRule, PriceFilter, SearchProfile, SearchSchedule
 from auction_watch.persistence.database import Database
 from auction_watch.persistence.models import ProfileRow, ProfileSourceRow
 
@@ -101,6 +101,8 @@ class ProfileRepository:
             exact_phrases=row.exact_phrases,
             exclude_keywords=row.exclude_keywords,
             boost_keywords=row.boost_keywords,
+            risk_keywords=row.risk_keywords,
+            context_rules=tuple(ContextRule(**rule) for rule in row.context_rules),
             source_ids=[source.source_id for source in sources],
             minimum_score=row.minimum_score,
             price_filter=price_filter,
@@ -132,6 +134,8 @@ class ProfileRepository:
             "exact_phrases": list(profile.exact_phrases),
             "exclude_keywords": list(profile.exclude_keywords),
             "boost_keywords": dict(profile.boost_keywords),
+            "risk_keywords": dict(profile.risk_keywords),
+            "context_rules": [rule.model_dump() for rule in profile.context_rules],
             "minimum_score": profile.minimum_score,
             "price_maximum": str(price_filter.maximum) if price_filter else None,
             "price_currency": price_filter.currency if price_filter else None,
@@ -165,6 +169,8 @@ class ProfileRepository:
             exact_phrases=[],
             exclude_keywords=[],
             boost_keywords={},
+            risk_keywords={},
+            context_rules=[],
             minimum_score=0,
             notification_mode=profile.notification_mode,
             schedule_enabled=profile.schedule.enabled,

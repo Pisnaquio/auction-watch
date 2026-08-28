@@ -30,10 +30,23 @@ normalized lot against every interested enabled profile and stores independent
 profile matches. Publication and notification consume durable snapshots and
 outbox records afterward.
 
-The public adapters currently include Bavastro, Castells, Remotes, TodoRemates,
-and Prado. To add a sixth source, implement `BaseAuctionSource`, add its
-public `SourceSpec` to a registry, and provide sanitized transport fixtures;
-the run, persistence, matcher, and notification layers remain unchanged.
+The public adapters currently include five protocol-specific integrations:
+
+- Bavastro uses the `published_auctions` JSON listing/detail API and paginated
+  `/lots/published/` responses;
+- Castells reads the `GXState` marker from its HTML home page, then calls the
+  public `rest/API/Remate/lotes` JSON endpoint;
+- Remotes parses the public RSS feed and its stable `lote` query identifiers;
+- TodoRemates reads the WordPress `remate` taxonomy and WooCommerce Store API,
+  following WordPress pagination headers;
+- Prado reads the WooCommerce Store API and its auction price/status markup.
+
+Each adapter owns its parsing and completeness proof; a protocol marker,
+response shape, or pagination failure becomes partial/failed rather than an
+authoritative empty inventory. To add a sixth source, implement
+`BaseAuctionSource`, add its public `SourceSpec` to a registry, and provide
+sanitized transport fixtures; the run, persistence, matcher, and notification
+layers remain unchanged.
 
 SQLite lives at `${AW_DATA_DIR}/auction-watch.sqlite3`. Alembic is the only
 schema authority, and packaged migrations are resolved independently of the

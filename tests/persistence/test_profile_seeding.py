@@ -24,6 +24,10 @@ def test_consolas_seed_is_idempotent_and_preserves_pause(repository: ProfileRepo
     first = repository.seed_system_profile(consoles_profile())
     assert first.profile.kind == "system"
     assert first.profile.locked is True
+    loaded = repository.get("consolas")
+    assert loaded is not None
+    assert loaded.profile.risk_keywords["no prende"] == 8
+    assert any(rule.term == "switch" for rule in loaded.profile.context_rules)
     assert repository.seed_system_profile(consoles_profile()).revision == 1
 
     paused = first.profile.model_copy(update={"enabled": False})
