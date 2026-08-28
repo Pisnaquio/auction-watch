@@ -1,0 +1,42 @@
+"""Transport abstraction used by source adapters and their deterministic tests."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, Protocol
+
+import httpx
+
+
+class Transport(Protocol):
+    def get(self, url: str, *, timeout: float) -> Any:
+        """Return a response-like object or decoded mapping."""
+
+
+class HttpxTransport:
+    """Small production transport; adapters remain unaware of httpx details."""
+
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        self.client = client or httpx.Client(follow_redirects=True)
+        self._owns_client = client is None
+
+    def get(self, url: str, *, timeout: float) -> httpx.Response:
+        response = self.client.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+
+def decode_response(response: Any) -> Any:
+    if isinstance(response, Mapping) or isinstance(response, list):
+        return response
+    json_method = getattr(response, "json", None)
+    if callable(json_method):
+        return json_method()
+    raise ValueError("transport response is not JSON-decodable")
+
+
+__all__ = ["HttpxTransport", "Transport", "decode_response"]

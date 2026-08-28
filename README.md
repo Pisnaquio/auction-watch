@@ -4,9 +4,11 @@ Auction Watch is a standalone, profile-driven monitor for public auction
 listings. The engine is intentionally generic: source adapters provide
 normalized auction data and user profiles provide the search behavior.
 
-This repository contains the technical foundation only. Sources, profiles,
-matching, scheduling, notifications, and Home Assistant packaging will be
-added in subsequent tasks.
+The current foundation includes strict domain contracts and matching,
+durable SQLite persistence, a locked public `consolas` system profile, and
+generic adapters for Bavastro, Castells, Remotes, TodoRemates, and Prado.
+Scheduling, HTTP profile endpoints, notification delivery, and Home Assistant
+packaging remain separate future tasks.
 
 ## Local development
 
