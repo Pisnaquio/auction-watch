@@ -6,21 +6,31 @@ import html
 import json
 import re
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any
 from urllib.parse import urlencode, urljoin
 
 from auction_watch.core.models import AuctionGroup, AuctionLot
 from auction_watch.sources.base import BaseAuctionSource
 from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
-from auction_watch.sources.parsing import clean_text, decimal_value, first_image, utc_datetime
-from auction_watch.sources.transport import decode_response
+from auction_watch.sources.parsing import (
+    clean_text,
+    decimal_value,
+    first_image,
+    normalize_currency,
+    utc_datetime,
+)
+from auction_watch.sources.transport import Transport, decode_response
 
 WEB_BASE = "https://subastascastells.com/"
 HOME_URL = urljoin(WEB_BASE, "frontend.home.aspx")
 LOTS_URL = urljoin(WEB_BASE, "rest/API/Remate/lotes")
 LOT_LIMIT = 9999
 MAX_PAGES = 50
+MAX_WORKERS = 6
+MAX_REQUESTS = 160
 
 
 def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
@@ -43,6 +53,31 @@ class CastellsSource(BaseAuctionSource):
     source_id = "castells"
     label = "Castells"
     discovery_url = HOME_URL
+
+    def __init__(
+        self,
+        transport: Transport,
+        *,
+        timeout: float | None = None,
+        max_workers: int = MAX_WORKERS,
+        max_requests: int = MAX_REQUESTS,
+    ) -> None:
+        super().__init__(transport, timeout=timeout)
+        if max_workers < 1:
+            raise ValueError("Castells max_workers must be positive")
+        if max_requests < 1:
+            raise ValueError("Castells max_requests must be positive")
+        self.max_workers = min(max_workers, MAX_WORKERS)
+        self.max_requests = max_requests
+        self._request_count = 0
+        self._request_lock = Lock()
+
+    def _get(self, url: str) -> Any:
+        with self._request_lock:
+            if self._request_count >= self.max_requests:
+                raise RuntimeError("Castells scan request budget exhausted")
+            self._request_count += 1
+        return decode_response(self.transport.get(url, timeout=self.timeout))
 
     def _fetch_lots(
         self, group: AuctionGroup, remate_type: int
@@ -67,8 +102,7 @@ class CastellsSource(BaseAuctionSource):
             if page > MAX_PAGES:
                 raise ValueError("Castells lots exceeded page limit")
             seen_urls.add(request_url)
-            response = self.transport.get(request_url, timeout=self.timeout)
-            payload = decode_response(response)
+            payload = self._get(request_url)
             if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
                 raise ValueError("Castells lots response lacks data")
             rows.extend(item for item in payload["data"] if isinstance(item, Mapping))
@@ -80,13 +114,110 @@ class CastellsSource(BaseAuctionSource):
                 return tuple(rows), False
             return tuple(rows), True
 
+    def _scan_group(
+        self, raw: Mapping[str, Any]
+    ) -> tuple[AuctionGroup | None, tuple[AuctionLot, ...], GroupReceipt, tuple[str, ...]]:
+        group_id = clean_text(raw.get("RemateId"))
+        started = datetime.now(UTC)
+        try:
+            if not group_id:
+                raise ValueError("auction lacks RemateId")
+            group = AuctionGroup(
+                source_id=self.source_id,
+                auction_id=group_id,
+                title=clean_text(raw.get("RemateNombre")) or f"Remate {group_id}",
+                url=urljoin(
+                    WEB_BASE,
+                    clean_text(raw.get("Link"))
+                    or f"frontend.sitio.visualremate.aspx?Remate={group_id}",
+                ),
+                category=clean_text(raw.get("RemateCategoriaNombre")),
+                active=True,
+                closing_at=utc_datetime(raw.get("RemateCierre")),
+                observed_at=started,
+            )
+            raw_lots, pagination_complete = self._fetch_lots(
+                group, int(raw.get("RemateTipo") or 1)
+            )
+            if not pagination_complete:
+                raise ValueError("lots pagination reached the hard limit")
+            group_lots: list[AuctionLot] = []
+            group_errors: list[str] = []
+            for item in raw_lots:
+                try:
+                    lot_id = clean_text(item.get("LoteId") or item.get("Id") or item.get("id"))
+                    title = clean_text(item.get("LoteDescripcion") or item.get("Descripcion"))
+                    raw_lot_url = clean_text(item.get("DetalleUrl"))
+                    if not lot_id or not title or not raw_lot_url:
+                        raise ValueError("lot lacks stable fields")
+                    price_label = clean_text(
+                        item.get("ValorActual") or item.get("LotePrecioSalida")
+                    )
+                    price = decimal_value(price_label)
+                    currency = normalize_currency(item.get("LotePrecioSalidaMonedaWF"))
+                    if price is not None and currency is None:
+                        group_errors.append(f"Castells group {group_id}: unknown currency")
+                        price = None
+                    group_lots.append(
+                        AuctionLot(
+                            source_id=self.source_id,
+                            auction_id=group_id,
+                            lot_id=lot_id,
+                            title=title,
+                            description=title,
+                            category=group.category,
+                            price_value=price,
+                            price_currency=currency if price is not None else None,
+                            price_label=price_label,
+                            closing_at=utc_datetime(item.get("LoteCierre")) or group.closing_at,
+                            lot_url=urljoin(WEB_BASE, raw_lot_url),
+                            auction_url=group.url,
+                            image_url=first_image(
+                                item.get("Imagen") or item.get("image"), base=WEB_BASE
+                            ),
+                            active=clean_text(item.get("Estado") or "active").lower()
+                            not in {"cerrado", "closed"},
+                            observed_at=started,
+                        )
+                    )
+                except (TypeError, ValueError):
+                    group_errors.append(f"Castells group {group_id}: malformed lot")
+            group_lots.sort(key=lambda lot: lot.lot_id)
+            status = "partial" if group_errors else "complete"
+            receipt = GroupReceipt(
+                group_id=group_id,
+                status=status,
+                inventory_authoritative=status == "complete",
+                lot_count=len(group_lots),
+                error_count=len(group_errors),
+                started_at=started,
+                finished_at=datetime.now(UTC),
+            )
+            return group, tuple(group_lots), receipt, tuple(group_errors)
+        except Exception as exc:
+            error = f"Castells group {group_id or 'unknown'}: {type(exc).__name__}"
+            receipt = GroupReceipt(
+                group_id=group_id or "unknown",
+                status="failed",
+                inventory_authoritative=False,
+                lot_count=0,
+                error_count=1,
+                started_at=started,
+                finished_at=datetime.now(UTC),
+            )
+            return None, (), receipt, (error,)
+
     def scan(self) -> SourceScanResult:
         try:
-            response = self.transport.get(self.discovery_url, timeout=self.timeout)
-            document = decode_response(response)
+            document = self._get(self.discovery_url)
             if not isinstance(document, str):
                 raise ValueError("Castells discovery must be HTML text")
-            auctions = parse_gxstate(document)
+            auctions = tuple(
+                sorted(
+                    parse_gxstate(document),
+                    key=lambda raw: clean_text(raw.get("RemateId")),
+                )
+            )
         except Exception as exc:
             return SourceScanResult(
                 source_id=self.source_id,
@@ -99,92 +230,14 @@ class CastellsSource(BaseAuctionSource):
         lots: list[AuctionLot] = []
         receipts: list[GroupReceipt] = []
         errors: list[str] = []
-        for raw in auctions:
-            group_id = clean_text(raw.get("RemateId"))
-            started = datetime.now(UTC)
-            try:
-                if not group_id:
-                    raise ValueError("auction lacks RemateId")
-                group = AuctionGroup(
-                    source_id=self.source_id,
-                    auction_id=group_id,
-                    title=clean_text(raw.get("RemateNombre")) or f"Remate {group_id}",
-                    url=urljoin(
-                        WEB_BASE,
-                        clean_text(raw.get("Link"))
-                        or f"frontend.sitio.visualremate.aspx?Remate={group_id}",
-                    ),
-                    category=clean_text(raw.get("RemateCategoriaNombre")),
-                    active=True,
-                    closing_at=utc_datetime(raw.get("RemateCierre")),
-                    observed_at=started,
-                )
-                raw_lots, pagination_complete = self._fetch_lots(
-                    group, int(raw.get("RemateTipo") or 1)
-                )
-                if not pagination_complete:
-                    raise ValueError("lots pagination reached the hard limit")
-                group_lots: list[AuctionLot] = []
-                for item in raw_lots:
-                    lot_id = clean_text(item.get("LoteId") or item.get("Id") or item.get("id"))
-                    title = clean_text(item.get("LoteDescripcion") or item.get("Descripcion"))
-                    raw_lot_url = clean_text(item.get("DetalleUrl"))
-                    lot_url = urljoin(WEB_BASE, raw_lot_url)
-                    if not lot_id or not title or not raw_lot_url:
-                        errors.append(f"Castells group {group_id}: malformed lot")
-                        continue
-                    price = decimal_value(item.get("ValorActual") or item.get("LotePrecioSalida"))
-                    currency = clean_text(item.get("LotePrecioSalidaMonedaWF") or "UYU").upper()
-                    group_lots.append(
-                        AuctionLot(
-                            source_id=self.source_id,
-                            auction_id=group_id,
-                            lot_id=lot_id,
-                            title=title,
-                            description=title,
-                            category=group.category,
-                            price_value=price,
-                            price_currency=currency if price is not None else None,
-                            price_label=clean_text(
-                                item.get("ValorActual") or item.get("LotePrecioSalida")
-                            ),
-                            closing_at=utc_datetime(item.get("LoteCierre")) or group.closing_at,
-                            lot_url=lot_url,
-                            auction_url=group.url,
-                            image_url=first_image(
-                                item.get("Imagen") or item.get("image"), base=WEB_BASE
-                            ),
-                            active=clean_text(item.get("Estado") or "active").lower()
-                            not in {"cerrado", "closed"},
-                            observed_at=started,
-                        )
-                    )
-                groups.append(group)
-                lots.extend(group_lots)
-                partial = any(f"group {group_id}" in error for error in errors)
-                receipts.append(
-                    GroupReceipt(
-                        group_id=group_id,
-                        status="partial" if partial else "complete",
-                        inventory_authoritative=not partial,
-                        lot_count=len(group_lots),
-                        error_count=1 if partial else 0,
-                        started_at=started,
-                        finished_at=datetime.now(UTC),
-                    )
-                )
-            except Exception as exc:
-                errors.append(f"Castells group {group_id or 'unknown'}: {type(exc).__name__}")
-                receipts.append(
-                    GroupReceipt(
-                        group_id=group_id or "unknown",
-                        status="failed",
-                        lot_count=0,
-                        error_count=1,
-                        started_at=started,
-                        finished_at=datetime.now(UTC),
-                    )
-                )
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            results = executor.map(self._scan_group, auctions)
+            for group, group_lots, receipt, group_errors in results:
+                if group is not None:
+                    groups.append(group)
+                    lots.extend(group_lots)
+                receipts.append(receipt)
+                errors.extend(group_errors)
         return SourceScanResult(
             source_id=self.source_id,
             label=self.label,

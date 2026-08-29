@@ -19,7 +19,7 @@ from auction_watch.sources import (
     SourceSpec,
     TodoRematesSource,
 )
-from auction_watch.sources.bavastro import API_BASE
+from auction_watch.sources.bavastro import API_BASE, LOTS_BASE
 from auction_watch.sources.castells import LOTS_URL
 from auction_watch.sources.prado import PRODUCTS_API_URL as PRADO_PRODUCTS_URL
 from auction_watch.sources.todoremates import PRODUCTS_API_URL, REMATES_API_URL
@@ -70,13 +70,13 @@ def test_bavastro_real_json_api_covers_lot_pagination() -> None:
             return FakeResponse(payload=discovery)
         if url == f"{API_BASE}/123/":
             return FakeResponse(payload=load_json("bavastro_detail.json"))
-        if "123/lots/published" in url and "page=1" in url:
+        if url.startswith(f"{LOTS_BASE}/123/lots/published") and "page=1" in url:
             return FakeResponse(payload=page1)
-        if "123/lots/published" in url and "page=2" in url:
+        if url.startswith(f"{LOTS_BASE}/123/lots/published") and "page=2" in url:
             return FakeResponse(payload=page2)
         if url == f"{API_BASE}/124/":
             return FakeResponse(payload={"id": 124, "name": "Fallida", "active": True})
-        if "124/lots/published" in url:
+        if url.startswith(f"{LOTS_BASE}/124/lots/published"):
             raise TimeoutError("fixture timeout")
         raise AssertionError(url)
 
@@ -91,6 +91,20 @@ def test_bavastro_real_json_api_covers_lot_pagination() -> None:
     assert result.receipts[0].status == "complete"
     assert result.receipts[1].status == "failed"
     assert all(timeout == 4 for _url, timeout in transport.calls)
+    assert all(f"{API_BASE}/" not in url for url, _timeout in transport.calls if "/lots/" in url)
+
+
+def test_bavastro_lots_do_not_use_discovery_base() -> None:
+    transport = FakeTransport(
+        lambda url: (
+            FakeResponse(payload={"results": [], "next": None})
+            if url.startswith(f"{API_BASE}/?page=1")
+            else (_ for _ in ()).throw(AssertionError(url))
+        )
+    )
+    result = BavastroSource(transport).scan()
+    assert result.discovery_status == "complete"
+    assert not any("/published_auctions/" in url and "/lots/" in url for url, _ in transport.calls)
 
 
 def test_bavastro_next_cycle_fails_closed() -> None:
@@ -123,6 +137,52 @@ def test_castells_json_is_rejected_instead_of_coerced() -> None:
     ).scan()
     assert result.discovery_status == "failed"
     assert "Castells" in result.errors[0]
+
+
+def test_castells_normalizes_observed_currency_labels_and_isolates_unknowns() -> None:
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        if url.startswith(LOTS_URL):
+            return FakeResponse(payload=load_json("castells_lots_currencies.json"))
+        raise AssertionError(url)
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+    assert [lot.price_currency for lot in result.lots] == [
+        "UYU",
+        "UYU",
+        "UYU",
+        "USD",
+        "USD",
+        "USD",
+        None,
+    ]
+    assert result.lots[-1].price_label == "500"
+    assert result.lots[-1].price_value is None
+    assert result.receipts[0].status == "partial"
+    assert result.receipts[0].error_count == 1
+    assert result.inventory_authoritative is False
+
+
+def test_castells_request_budget_fails_pending_groups_closed() -> None:
+    document = "<html><script>GXState=" + "".join(
+        f'{{"RemateImagen":"/img.jpg","RemateId":{id_},"RemateNombre":"Remate {id_}"}}'
+        for id_ in (1, 2, 3)
+    ) + ";</script></html>"
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=document)
+        if url.startswith(LOTS_URL):
+            return FakeResponse(payload={"data": []})
+        raise AssertionError(url)
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport, max_requests=2).scan()
+    assert len(result.receipts) == 3
+    assert sum(receipt.status == "failed" for receipt in result.receipts) >= 1
+    assert result.inventory_authoritative is False
+    assert len(transport.calls) == 2
 
 
 def test_remotes_parses_rss_and_deduplicates_by_query_lot_id() -> None:
@@ -187,6 +247,25 @@ def test_todoremates_missing_second_page_is_not_authoritative() -> None:
     assert result.discovery_status == "failed"
     assert result.inventory_authoritative is False
     assert calls == 2
+
+
+def test_todoremates_403_is_sanitized_and_not_empty_inventory() -> None:
+    request = httpx.Request("GET", REMATES_API_URL)
+    response = httpx.Response(403, request=request)
+    error = httpx.HTTPStatusError("forbidden", request=request, response=response)
+    result = TodoRematesSource(FakeTransport(lambda _url: (_ for _ in ()).throw(error))).scan()
+    assert result.discovery_status == "failed"
+    assert result.inventory_authoritative is False
+    assert result.errors == ("TodoRemates taxonomy failed (HTTP 403)",)
+
+
+def test_todoremates_uses_source_specific_public_headers() -> None:
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    transport = HttpxTransport(client)
+    TodoRematesSource(transport)
+    assert client.headers["accept"] == "application/json"
+    assert "todoremates" in client.headers["user-agent"]
+    client.close()
 
 
 def test_wordpress_absurd_page_total_is_rejected() -> None:

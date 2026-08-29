@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -36,6 +37,39 @@ def decimal_value(value: Any) -> Decimal | None:
     except (InvalidOperation, ValueError):
         return None
     return value if value.is_finite() and value >= 0 else None
+
+
+def normalize_currency(value: Any) -> str | None:
+    """Map observed source labels to the domain's three-letter currencies."""
+
+    raw = clean_text(value).upper()
+    folded = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", raw)
+        if not unicodedata.combining(character)
+    )
+    compact = re.sub(r"[\s._-]+", "", folded)
+    if compact in {
+        "$",
+        "$U",
+        "UYU",
+        "PESO",
+        "PESOS",
+        "PESOURUGUAYO",
+        "PESOSURUGUAYOS",
+    }:
+        return "UYU"
+    if compact in {
+        "USD",
+        "U$S",
+        "US$",
+        "DOLAR",
+        "DOLARES",
+        "DOLLAR",
+        "DOLLARS",
+    }:
+        return "USD"
+    return None
 
 
 def utc_datetime(value: Any, *, zone: str = "America/Montevideo") -> datetime | None:

@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
+
 from auction_watch.core.models import AuctionGroup, AuctionLot
 from auction_watch.sources.base import BaseAuctionSource
 from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
@@ -17,19 +19,39 @@ from auction_watch.sources.parsing import (
     first_image,
     utc_datetime,
 )
-from auction_watch.sources.transport import decode_response, response_headers
+from auction_watch.sources.transport import (
+    HttpxTransport,
+    Transport,
+    decode_response,
+    response_headers,
+)
 
 BASE_URL = "https://todoremates.com.uy"
 REMATES_API_URL = f"{BASE_URL}/wp-json/wp/v2/remate"
 PRODUCTS_API_URL = f"{BASE_URL}/wp-json/wc/store/v1/products"
 PAGE_SIZE = 100
 MAX_PAGES = 50
+SOURCE_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "Auction Watch/0.1 (+public source adapter; read-only; todoremates)",
+}
+
+
+def _error_label(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
 
 
 class TodoRematesSource(BaseAuctionSource):
     source_id = "todoremates"
     label = "TodoRemates"
     discovery_url = REMATES_API_URL
+
+    def __init__(self, transport: Transport, *, timeout: float | None = None) -> None:
+        super().__init__(transport, timeout=timeout)
+        if isinstance(transport, HttpxTransport):
+            transport.set_headers(SOURCE_HEADERS)
 
     def _page(
         self, url: str, page: int, **params: object
@@ -114,7 +136,7 @@ class TodoRematesSource(BaseAuctionSource):
                 source_id=self.source_id,
                 label=self.label,
                 discovery_status="failed",
-                errors=(f"TodoRemates taxonomy failed ({type(exc).__name__})",),
+                errors=(f"TodoRemates taxonomy failed ({_error_label(exc)})",),
             )
         groups: list[AuctionGroup] = []
         lots: list[AuctionLot] = []
@@ -142,7 +164,7 @@ class TodoRematesSource(BaseAuctionSource):
             except Exception as exc:
                 errors.append(
                     "TodoRemates group "
-                    f"{group_id}: product pagination failed ({type(exc).__name__})"
+                    f"{group_id}: product pagination failed ({_error_label(exc)})"
                 )
                 receipts.append(
                     GroupReceipt(
@@ -156,6 +178,7 @@ class TodoRematesSource(BaseAuctionSource):
                 )
                 continue
             group_lots: list[AuctionLot] = []
+            group_error_count = 0
             for product in products:
                 try:
                     if (
@@ -167,15 +190,16 @@ class TodoRematesSource(BaseAuctionSource):
                     group_lots.append(self._product_lot(product, group))
                 except (TypeError, ValueError):
                     errors.append(f"TodoRemates group {group_id}: malformed product")
+                    group_error_count += 1
             lots.extend(group_lots)
-            partial = any(f"group {group_id}" in error for error in errors)
+            partial = group_error_count > 0
             receipts.append(
                 GroupReceipt(
                     group_id=group_id,
                     status="partial" if partial else "complete",
                     inventory_authoritative=not partial,
                     lot_count=len(group_lots),
-                    error_count=1 if partial else 0,
+                    error_count=group_error_count,
                     started_at=started,
                     finished_at=datetime.now(UTC),
                 )

@@ -16,13 +16,20 @@ class Transport(Protocol):
 class HttpxTransport:
     """Small production transport; adapters remain unaware of httpx details."""
 
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         self.client = client or httpx.Client(follow_redirects=True)
         self._owns_client = client is None
         self.client.headers["User-Agent"] = "Auction Watch/0.1 (+public source adapter; read-only)"
         self.client.headers[
             "Accept"
         ] = "application/json, text/html, application/rss+xml, application/xml;q=0.9"
+        if headers:
+            self.client.headers.update(headers)
 
     def get(self, url: str, *, timeout: float) -> httpx.Response:
         for attempt in range(2):
@@ -38,6 +45,11 @@ class HttpxTransport:
                     continue
                 raise
         raise RuntimeError("transport retry loop exhausted")
+
+    def set_headers(self, headers: Mapping[str, str]) -> None:
+        """Apply a source's documented public request headers."""
+
+        self.client.headers.update(headers)
 
     def close(self) -> None:
         if self._owns_client:

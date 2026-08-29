@@ -19,6 +19,7 @@ from auction_watch.sources.parsing import (
 from auction_watch.sources.transport import decode_response, response_headers
 
 API_BASE = "https://api-parseo.bavastronline.com/published_auctions"
+LOTS_BASE = "https://api-parseo.bavastronline.com/auctions"
 WEB_BASE = "https://www.bavastronline.com.uy"
 PAGE_SIZE = 100
 MAX_PAGES = 50
@@ -81,7 +82,7 @@ class BavastroSource(BaseAuctionSource):
 
     def _lots(self, auction_id: str) -> list[Mapping[str, Any]]:
         page = 1
-        url: str | None = f"{API_BASE}/{auction_id}/lots/published/?page={page}&page_size=50"
+        url: str | None = f"{LOTS_BASE}/{auction_id}/lots/published/?page={page}&page_size=50"
         rows: list[Mapping[str, Any]] = []
         seen_urls: set[str] = set()
         while url:
@@ -174,23 +175,23 @@ class BavastroSource(BaseAuctionSource):
                 started = datetime.now(UTC)
                 raw_lots = self._lots(group.auction_id)
                 group_lots: list[AuctionLot] = []
+                group_error_count = 0
                 for raw in raw_lots:
                     try:
                         group_lots.append(self._parse_lot(raw, group))
                     except ValueError:
                         errors.append(f"Bavastro group {group.auction_id}: malformed lot")
+                        group_error_count += 1
                 groups.append(group)
                 lots.extend(group_lots)
-                status = (
-                    "partial" if any(group.auction_id in error for error in errors) else "complete"
-                )
+                status = "partial" if group_error_count else "complete"
                 receipts.append(
                     GroupReceipt(
                         group_id=group.auction_id,
                         status=status,
                         inventory_authoritative=status == "complete",
                         lot_count=len(group_lots),
-                        error_count=0 if status == "complete" else 1,
+                        error_count=group_error_count,
                         started_at=started,
                         finished_at=datetime.now(UTC),
                     )

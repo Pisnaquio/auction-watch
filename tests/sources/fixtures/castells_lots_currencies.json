@@ -1,0 +1,9 @@
+{"data":[
+  {"LoteId":"77:1","LoteDescripcion":"Pesos","DetalleUrl":"frontend.sitio.visualremate.aspx?Remate=77&Lote=1","ValorActual":"100","LotePrecioSalidaMonedaWF":"$"},
+  {"LoteId":"77:2","LoteDescripcion":"Pesos U","DetalleUrl":"frontend.sitio.visualremate.aspx?Remate=77&Lote=2","ValorActual":"200","LotePrecioSalidaMonedaWF":"$U"},
+  {"LoteId":"77:3","LoteDescripcion":"Pesos UYU","DetalleUrl":"frontend.sitio.visualremate.aspx?Remate=77&Lote=3","ValorActual":"300","LotePrecioSalidaMonedaWF":"UYU"},
+  {"LoteId":"77:4","LoteDescripcion":"Dólares U$S","DetalleUrl":"frontend.sitio.visualremate.aspx?Remate=77&Lote=4","ValorActual":"400","LotePrecioSalidaMonedaWF":"U$S"},
+  {"LoteId":"77:5","LoteDescripcion":"Dólares US$","DetalleUrl":"frontend.sitio.visualremate.aspx?Remate=77&Lote=5","ValorActual":"500","LotePrecioSalidaMonedaWF":"US$"},
+  {"LoteId":"77:6","LoteDescripcion":"Dólares USD","DetalleUrl":"frontend.sitio.visualremate.aspx?Remate=77&Lote=6","ValorActual":"600","LotePrecioSalidaMonedaWF":"USD"},
+  {"LoteId":"77:7","LoteDescripcion":"Moneda desconocida","DetalleUrl":"frontend.sitio.visualremate.aspx?Remate=77&Lote=7","ValorActual":"500","LotePrecioSalidaMonedaWF":"ARS"}
+]}
