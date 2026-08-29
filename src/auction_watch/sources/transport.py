@@ -9,7 +9,13 @@ import httpx
 
 
 class Transport(Protocol):
-    def get(self, url: str, *, timeout: float) -> Any:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str] | None = None,
+    ) -> Any:
         """Return a response-like object or decoded mapping."""
 
 
@@ -19,8 +25,6 @@ class HttpxTransport:
     def __init__(
         self,
         client: httpx.Client | None = None,
-        *,
-        headers: Mapping[str, str] | None = None,
     ) -> None:
         self.client = client or httpx.Client(follow_redirects=True)
         self._owns_client = client is None
@@ -28,13 +32,17 @@ class HttpxTransport:
         self.client.headers[
             "Accept"
         ] = "application/json, text/html, application/rss+xml, application/xml;q=0.9"
-        if headers:
-            self.client.headers.update(headers)
 
-    def get(self, url: str, *, timeout: float) -> httpx.Response:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
         for attempt in range(2):
             try:
-                response = self.client.get(url, timeout=timeout)
+                response = self.client.get(url, timeout=timeout, headers=headers)
                 if response.status_code in {429, 500, 502, 503, 504} and attempt == 0:
                     response.close()
                     continue
@@ -45,11 +53,6 @@ class HttpxTransport:
                     continue
                 raise
         raise RuntimeError("transport retry loop exhausted")
-
-    def set_headers(self, headers: Mapping[str, str]) -> None:
-        """Apply a source's documented public request headers."""
-
-        self.client.headers.update(headers)
 
     def close(self) -> None:
         if self._owns_client:

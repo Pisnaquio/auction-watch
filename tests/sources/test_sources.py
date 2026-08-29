@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -46,9 +49,17 @@ class FakeTransport:
     def __init__(self, handler) -> None:
         self.handler = handler
         self.calls: list[tuple[str, float]] = []
+        self.request_headers: list[Mapping[str, str]] = []
 
-    def get(self, url: str, *, timeout: float) -> FakeResponse:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str] | None = None,
+    ) -> FakeResponse:
         self.calls.append((url, timeout))
+        self.request_headers.append(dict(headers or {}))
         return self.handler(url)
 
 
@@ -185,6 +196,77 @@ def test_castells_request_budget_fails_pending_groups_closed() -> None:
     assert len(transport.calls) == 2
 
 
+def test_castells_deadline_before_discovery_makes_no_request() -> None:
+    clock_values = iter((0.0, 1.0))
+    transport = FakeTransport(lambda _url: FakeResponse(text="unused"))
+    result = CastellsSource(
+        transport,
+        deadline_seconds=0.5,
+        clock=lambda: next(clock_values),
+    ).scan()
+    assert result.discovery_status == "failed"
+    assert result.inventory_authoritative is False
+    assert "deadline exceeded" in result.errors[0]
+    assert transport.calls == []
+
+
+def test_castells_deadline_preserves_finished_groups_and_fails_pending_in_order() -> None:
+    document = "<html><script>GXState=" + "".join(
+        f'{{"RemateImagen":"/img.jpg","RemateId":{id_},"RemateNombre":"Remate {id_}"}}'
+        for id_ in (3, 1, 2)
+    ) + ";</script></html>"
+    clock_calls = 0
+
+    def clock() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        if clock_calls <= 4:
+            return 0.0
+        return 2.0
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=document)
+        return FakeResponse(payload={"data": []})
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(
+        transport,
+        timeout=5,
+        deadline_seconds=1.0,
+        clock=clock,
+    ).scan()
+    assert len(result.groups) == 2
+    assert [group.auction_id for group in result.groups] == sorted(
+        group.auction_id for group in result.groups
+    )
+    assert [receipt.group_id for receipt in result.receipts] == ["1", "2", "3"]
+    assert [receipt.status for receipt in result.receipts].count("complete") == 2
+    assert [receipt.status for receipt in result.receipts].count("failed") == 1
+    assert all(timeout <= 1.0 for _url, timeout in transport.calls)
+    assert result.inventory_authoritative is False
+
+
+def test_castells_productive_deadline_is_bounded_and_order_is_deterministic() -> None:
+    document = "<html><script>GXState=" + "".join(
+        f'{{"RemateImagen":"/img.jpg","RemateId":{id_},"RemateNombre":"Remate {id_}"}}'
+        for id_ in (20, 10, 30)
+    ) + ";</script></html>"
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=document)
+        return FakeResponse(payload={"data": []})
+
+    transport = FakeTransport(handler)
+    started = monotonic()
+    result = CastellsSource(transport, deadline_seconds=1.0).scan()
+    assert monotonic() - started < 1.0
+    assert [group.auction_id for group in result.groups] == ["10", "20", "30"]
+    assert [receipt.group_id for receipt in result.receipts] == ["10", "20", "30"]
+    assert result.inventory_authoritative is True
+
+
 def test_remotes_parses_rss_and_deduplicates_by_query_lot_id() -> None:
     result = RemotesSource(
         FakeTransport(lambda url: FakeResponse(text=load_text("remotes_feed.xml")))
@@ -260,11 +342,80 @@ def test_todoremates_403_is_sanitized_and_not_empty_inventory() -> None:
 
 
 def test_todoremates_uses_source_specific_public_headers() -> None:
-    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json=[])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
     transport = HttpxTransport(client)
-    TodoRematesSource(transport)
-    assert client.headers["accept"] == "application/json"
-    assert "todoremates" in client.headers["user-agent"]
+    base_headers = dict(client.headers)
+    TodoRematesSource(transport)._page(REMATES_API_URL, 1)
+    assert dict(client.headers) == base_headers
+    assert requests[0].headers["accept"] == "application/json"
+    assert "todoremates" in requests[0].headers["user-agent"]
+    client.close()
+
+
+def test_source_headers_are_isolated_in_both_construction_orders() -> None:
+    source_types = (BavastroSource, CastellsSource, RemotesSource, TodoRematesSource, PradoSource)
+    for ordered_types in (source_types, tuple(reversed(source_types))):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request, captured=requests) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(200, request=request, json=[])
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        transport = HttpxTransport(client)
+        base_accept = client.headers["accept"]
+        base_user_agent = client.headers["user-agent"]
+        base_headers = dict(client.headers)
+        instances = [source_type(transport) for source_type in ordered_types]
+        assert dict(client.headers) == base_headers
+        todo = next(source for source in instances if isinstance(source, TodoRematesSource))
+        bavastro = next(source for source in instances if isinstance(source, BavastroSource))
+        todo._page(REMATES_API_URL, 1)
+        bavastro._json("https://api-parseo.bavastronline.com/public")
+        assert requests[0].headers["accept"] == "application/json"
+        assert "todoremates" in requests[0].headers["user-agent"]
+        assert requests[1].headers["accept"] == base_accept
+        assert requests[1].headers["user-agent"] == base_user_agent
+        client.close()
+
+
+def test_source_headers_remain_isolated_concurrently() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json=[])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    transport = HttpxTransport(client)
+    todo = TodoRematesSource(transport)
+    bavastro = BavastroSource(transport)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(todo._page, REMATES_API_URL, index)
+            for index in range(1, 6)
+        ] + [
+            executor.submit(bavastro._json, f"https://example.test/{index}")
+            for index in range(1, 6)
+        ]
+        for future in futures:
+            future.result()
+    todo_requests = [request for request in requests if "todoremates.com.uy" in str(request.url)]
+    bavastro_requests = [request for request in requests if "example.test" in str(request.url)]
+    assert len(todo_requests) == len(bavastro_requests) == 5
+    assert all(request.headers["accept"] == "application/json" for request in todo_requests)
+    assert all("todoremates" in request.headers["user-agent"] for request in todo_requests)
+    assert all(
+        "application/json, text/html" in request.headers["accept"]
+        for request in bavastro_requests
+    )
+    assert all("todoremates" not in request.headers["user-agent"] for request in bavastro_requests)
     client.close()
 
 

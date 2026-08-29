@@ -5,10 +5,11 @@ from __future__ import annotations
 import html
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Lock
+from time import monotonic
 from typing import Any
 from urllib.parse import urlencode, urljoin
 
@@ -31,6 +32,17 @@ LOT_LIMIT = 9999
 MAX_PAGES = 50
 MAX_WORKERS = 6
 MAX_REQUESTS = 160
+# Six bounded workers keep the normal scan below the observed two-minute run.
+MAX_SCAN_SECONDS = 90.0
+
+
+def _error_label(exc: Exception) -> str:
+    message = str(exc)
+    if message == "Castells scan deadline exceeded":
+        return "deadline exceeded"
+    if message == "Castells scan request budget exhausted":
+        return "request budget exhausted"
+    return type(exc).__name__
 
 
 def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
@@ -61,23 +73,37 @@ class CastellsSource(BaseAuctionSource):
         timeout: float | None = None,
         max_workers: int = MAX_WORKERS,
         max_requests: int = MAX_REQUESTS,
+        deadline_seconds: float = MAX_SCAN_SECONDS,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         super().__init__(transport, timeout=timeout)
         if max_workers < 1:
             raise ValueError("Castells max_workers must be positive")
         if max_requests < 1:
             raise ValueError("Castells max_requests must be positive")
+        if deadline_seconds <= 0:
+            raise ValueError("Castells deadline_seconds must be positive")
         self.max_workers = min(max_workers, MAX_WORKERS)
         self.max_requests = max_requests
+        self.deadline_seconds = deadline_seconds
+        self.clock = clock
         self._request_count = 0
         self._request_lock = Lock()
+        self._deadline: float | None = None
 
     def _get(self, url: str) -> Any:
         with self._request_lock:
+            if self._deadline is None:
+                raise RuntimeError("Castells scan deadline is not initialized")
+            remaining = self._deadline - self.clock()
+            if remaining <= 0:
+                raise RuntimeError("Castells scan deadline exceeded")
             if self._request_count >= self.max_requests:
                 raise RuntimeError("Castells scan request budget exhausted")
             self._request_count += 1
-        return decode_response(self.transport.get(url, timeout=self.timeout))
+        return decode_response(
+            self.transport.get(url, timeout=min(self.timeout, remaining))
+        )
 
     def _fetch_lots(
         self, group: AuctionGroup, remate_type: int
@@ -195,7 +221,7 @@ class CastellsSource(BaseAuctionSource):
             )
             return group, tuple(group_lots), receipt, tuple(group_errors)
         except Exception as exc:
-            error = f"Castells group {group_id or 'unknown'}: {type(exc).__name__}"
+            error = f"Castells group {group_id or 'unknown'}: {_error_label(exc)}"
             receipt = GroupReceipt(
                 group_id=group_id or "unknown",
                 status="failed",
@@ -208,6 +234,9 @@ class CastellsSource(BaseAuctionSource):
             return None, (), receipt, (error,)
 
     def scan(self) -> SourceScanResult:
+        with self._request_lock:
+            self._request_count = 0
+            self._deadline = self.clock() + self.deadline_seconds
         try:
             document = self._get(self.discovery_url)
             if not isinstance(document, str):
@@ -223,7 +252,7 @@ class CastellsSource(BaseAuctionSource):
                 source_id=self.source_id,
                 label=self.label,
                 discovery_status="failed",
-                errors=(f"Castells discovery failed ({type(exc).__name__})",),
+                errors=(f"Castells discovery failed ({_error_label(exc)})",),
             )
 
         groups: list[AuctionGroup] = []
@@ -238,6 +267,9 @@ class CastellsSource(BaseAuctionSource):
                     lots.extend(group_lots)
                 receipts.append(receipt)
                 errors.extend(group_errors)
+        if self._deadline is not None and self.clock() >= self._deadline:
+            if "Castells scan deadline exceeded" not in errors:
+                errors.append("Castells scan deadline exceeded")
         return SourceScanResult(
             source_id=self.source_id,
             label=self.label,

@@ -19,12 +19,7 @@ from auction_watch.sources.parsing import (
     first_image,
     utc_datetime,
 )
-from auction_watch.sources.transport import (
-    HttpxTransport,
-    Transport,
-    decode_response,
-    response_headers,
-)
+from auction_watch.sources.transport import decode_response, response_headers
 
 BASE_URL = "https://todoremates.com.uy"
 REMATES_API_URL = f"{BASE_URL}/wp-json/wp/v2/remate"
@@ -48,16 +43,13 @@ class TodoRematesSource(BaseAuctionSource):
     label = "TodoRemates"
     discovery_url = REMATES_API_URL
 
-    def __init__(self, transport: Transport, *, timeout: float | None = None) -> None:
-        super().__init__(transport, timeout=timeout)
-        if isinstance(transport, HttpxTransport):
-            transport.set_headers(SOURCE_HEADERS)
-
     def _page(
         self, url: str, page: int, **params: object
     ) -> tuple[list[Mapping[str, Any]], int | None]:
         query = {"page": page, "per_page": PAGE_SIZE, **params}
-        response = self.transport.get(f"{url}?{urlencode(query)}", timeout=self.timeout)
+        response = self.transport.get(
+            f"{url}?{urlencode(query)}", timeout=self.timeout, headers=SOURCE_HEADERS
+        )
         payload = decode_response(response)
         if not isinstance(payload, list):
             raise ValueError("TodoRemates response is not a JSON array")
