@@ -650,7 +650,9 @@ class OperationalRepository:
                 )
                 if existing is not None:
                     return int(existing.id)
-                row = NotificationOutboxRow(**item.model_dump())
+                values = item.model_dump()
+                values["payload_json"] = values.pop("payload")
+                row = NotificationOutboxRow(**values)
                 session.add(row)
                 session.flush()
                 return int(row.id)

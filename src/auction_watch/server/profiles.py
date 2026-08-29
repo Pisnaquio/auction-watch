@@ -8,6 +8,7 @@ from typing import Any, Literal, NoReturn, cast
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from auction_watch.async_ops import NotificationRepository, RunQueueRepository
 from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
 from auction_watch.core.models import SearchProfile
 from auction_watch.persistence.contracts import UserOpportunityState
@@ -97,6 +98,20 @@ def _repositories(request: Request) -> tuple[ProfileRepository, OperationalRepos
     return profiles, operational
 
 
+def _queue(request: Request) -> RunQueueRepository:
+    queue = getattr(request.app.state, "run_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="run queue is not ready")
+    return cast(RunQueueRepository, queue)
+
+
+def _notifications(request: Request) -> NotificationRepository:
+    notifications = getattr(request.app.state, "notifications", None)
+    if notifications is None:
+        raise HTTPException(status_code=503, detail="notification outbox is not ready")
+    return cast(NotificationRepository, notifications)
+
+
 def _profile_view(stored: StoredProfile) -> dict[str, object]:
     return {
         "profile": stored.profile.model_dump(mode="json"),
@@ -162,6 +177,29 @@ def _run_view(outcome: RunOutcome, operational: OperationalRepository) -> dict[s
     }
 
 
+def _queue_view(
+    item: Any, operational: OperationalRepository
+) -> dict[str, object]:
+    run = operational.get_run(item.run_id)
+    snapshot = operational.snapshot_for_run(item.run_id)
+    return {
+        "run_id": item.run_id,
+        "idempotency_key": item.idempotency_key,
+        "profile_id": item.profile_id,
+        "trigger": item.trigger,
+        "status": item.status,
+        "attempt": item.attempt,
+        "enqueued_at": item.enqueued_at.isoformat(),
+        "started_at": item.started_at.isoformat() if item.started_at else None,
+        "finished_at": item.finished_at.isoformat() if item.finished_at else None,
+        "error": item.error or (run.error if run else None),
+        "selected_sources": list(run.selected_sources) if run else [],
+        "snapshot_id": snapshot.snapshot_id if snapshot else None,
+        "content_hash": snapshot.content_hash if snapshot else None,
+        "snapshot": _snapshot_view(snapshot) if snapshot else None,
+    }
+
+
 def _snapshot_view(row: Any) -> dict[str, object]:
     return {
         "snapshot_id": row.snapshot_id,
@@ -210,6 +248,22 @@ def list_sources() -> list[dict[str, str]]:
 def list_profiles(request: Request) -> list[dict[str, object]]:
     profiles, _ = _repositories(request)
     return [_profile_view(item) for item in profiles.list()]
+
+
+@router.get("/profiles/{profile_id}/runs")
+def list_profile_runs(request: Request, profile_id: str) -> list[dict[str, object]]:
+    profiles, operational = _repositories(request)
+    if profiles.get(profile_id) is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    return [_queue_view(item, operational) for item in _queue(request).recent(profile_id)]
+
+
+@router.get("/profiles/{profile_id}/notifications")
+def list_profile_notifications(request: Request, profile_id: str) -> list[dict[str, object]]:
+    profiles, _ = _repositories(request)
+    if profiles.get(profile_id) is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    return [item.model_dump(mode="json") for item in _notifications(request).recent(profile_id)]
 
 
 @router.post("/profiles", status_code=status.HTTP_201_CREATED)
@@ -293,21 +347,31 @@ def delete_profile(request: Request, profile_id: str, expected_revision: int) ->
         _raise_profile_error(exc)
 
 
-@router.post("/runs")
+@router.post("/runs", status_code=status.HTTP_202_ACCEPTED)
 def create_run(
     request: Request,
     body: RunCreateRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict[str, object]:
-    _, operational = _repositories(request)
-    engine = getattr(request.app.state, "run_engine", None)
-    if engine is None:
-        raise HTTPException(status_code=503, detail="run engine is not ready")
+    profiles, operational = _repositories(request)
+    queue = _queue(request)
+    stored = profiles.get(body.profile_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    if not stored.profile.enabled:
+        raise HTTPException(status_code=409, detail="profile is paused")
     key = idempotency_key or body.request_id
     if key is None or not key.strip():
         raise HTTPException(status_code=400, detail="Idempotency-Key is required")
     if len(key) > 256:
         raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
+    existing_queue = queue.get_by_key(key)
+    if existing_queue is not None:
+        if existing_queue.profile_id != stored.profile.id:
+            raise HTTPException(
+                status_code=409, detail="Idempotency-Key belongs to another profile"
+            )
+        return _queue_view(existing_queue, operational)
     existing = operational.get_run(key)
     if existing is not None:
         bound_profiles = operational.run_profile_ids(key)
@@ -328,8 +392,13 @@ def create_run(
             operational,
         )
     try:
-        outcome = engine.run(body.profile_id, request_id=key, trigger="manual")
-        return _run_view(outcome, operational)
+        queued, _ = queue.enqueue(
+            idempotency_key=key,
+            profile_id=stored.profile.id,
+            trigger="manual",
+            revision=stored.revision,
+        )
+        return _queue_view(queued, operational)
     except Exception as exc:
         _raise_profile_error(exc)
 
@@ -337,6 +406,9 @@ def create_run(
 @router.get("/runs/{run_id}")
 def get_run(request: Request, run_id: str) -> dict[str, object]:
     _, operational = _repositories(request)
+    queued = _queue(request).get(run_id)
+    if queued is not None:
+        return _queue_view(queued, operational)
     run = operational.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")

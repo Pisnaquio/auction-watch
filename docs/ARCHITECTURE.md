@@ -69,6 +69,15 @@ their previous inventory. Failed runs do not replace the last snapshot.
 The scheduler helper only determines due profiles. It does not start a daemon,
 perform network work, or send notifications.
 
+Manual and scheduled requests enter `run_queue`; a single-process worker claims
+them transactionally, resumes abandoned jobs after restart, and invokes the
+same durable run engine. The notification planner compares persisted snapshots
+and writes one logical SMTP outbox item per run/profile/channel when policy
+requires it. Delivery is retried with bounded backoff through a sender
+contract; the SMTP implementation is runtime-configured and the fake sender is
+used by tests. The worker is opt-in through `AW_WORKER_ENABLED` so validation
+and local startup cannot unexpectedly perform scans or send mail.
+
 The versioned profile API and React web client expose this durable boundary:
 profile CRUD uses optimistic revisions, manual runs require an idempotency key,
 snapshots are read from persisted reconciled state, and opportunity decisions

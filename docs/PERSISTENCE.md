@@ -22,6 +22,8 @@ The migration chain is:
 - `0004_contextual_profile_rules`: reusable risk weights and context gates.
 - `0005_run_engine`: run provenance, profile revisions, durable leases, and
   historical profile matches.
+- `0006_profile_categories`: optional profile category filters.
+- `0007_async_runs_notifications`: durable run queue and notification payloads.
 
 Upgrades are safe to run repeatedly. Each engine enables foreign keys, WAL,
 busy timeout, and explicit transaction boundaries. All timestamps are stored
@@ -44,6 +46,13 @@ same decision at group granularity with `complete`, `partial`, or `failed`
 coverage. `auction_snapshots` is an immutable, hash-addressed publication
 payload associated with a run.
 
+`run_queue` is the durable handoff from the versioned API or scheduler to the
+single-process worker. Its unique idempotency key and transactionally claimed
+status make retries safe; jobs left `running` by an interrupted process are
+returned to `queued` on worker startup. The worker invokes the existing engine
+with the persisted run ID, so engine idempotency prevents duplicate snapshots
+or matches.
+
 `opportunities` stores lifecycle separately from the normalized lot. It keeps
 `first_seen_at`, `last_seen_at`, `seen_count`, active/removed state,
 `removed_at`, and the last run that confirmed presence or authoritative
@@ -58,10 +67,19 @@ when inventory disappears or reappears.
 
 `notification_outbox` stores channel, profile, run/snapshot association,
 deduplication key, delivery status (`pending`, `sending`, `sent`, `failed`, or
-`uncertain`), attempts, sanitized error, retry time, and timestamps. A unique
+`uncertain`), notification type, sanitized payload, attempts, retry time, and
+timestamps. A unique
 deduplication key prevents duplicate logical deliveries. There are no
 cascades from operational history, user state, or outbox rows that could erase
 those records accidentally.
+
+Notification planning compares the current persisted snapshot with the prior
+one and creates an outbox item only for a new or materially changed match, or
+for a configured failure. A partial/non-authoritative run never creates a
+zero-result notification. Delivery is a separate bounded worker with
+`pending`, `sending`, `sent`, and `failed` states and exponential backoff.
+`AW_WORKER_ENABLED` is opt-in; SMTP settings are read only from the runtime
+environment and are absent from the repository and logs.
 
 ## Fail-closed inventory reconciliation
 
@@ -87,9 +105,10 @@ per run, persists source and group receipts before reconciliation, evaluates
 the active reconciled inventory against every selected profile, and creates a
 snapshot only after that logical sequence succeeds. A run with no verifiable
 source state is failed and leaves the previous snapshot untouched; a degraded
-run publishes a partial snapshot with its coverage limitations. API, daemon
-scheduling, email, complete UI integration, and Home Assistant deployment are
-outside this task.
+run publishes a partial snapshot with its coverage limitations. The API
+enqueues work and exposes durable progress, while the optional worker and
+notification sender consume those records. Home Assistant deployment and real
+external scans remain outside this task.
 
 ## Transaction and repository rules
 

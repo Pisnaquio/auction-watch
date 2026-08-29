@@ -172,6 +172,36 @@ class RunRecord(PersistenceModel):
         return values
 
 
+class RunQueueRecord(PersistenceModel):
+    idempotency_key: str
+    run_id: str
+    profile_id: str
+    trigger: Literal["manual", "scheduled", "system"] = "manual"
+    status: Literal["queued", "running", "completed", "partial", "failed"] = "queued"
+    attempt: int = Field(default=0, ge=0)
+    enqueued_at: datetime
+    available_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+
+    _key = field_validator("idempotency_key", mode="before")(
+        lambda value: _text(value, "idempotency_key")
+    )
+    _run = field_validator("run_id", mode="before")(lambda value: _text(value, "run_id"))
+    _profile = field_validator("profile_id", mode="before")(
+        lambda value: canonical_slug(value, "profile_id")
+    )
+    _enqueued = field_validator("enqueued_at", mode="after")(utc_datetime)
+    _available = field_validator("available_at", mode="after")(utc_datetime)
+    _started = field_validator("started_at", mode="after")(
+        lambda value: utc_datetime(value) if value else None
+    )
+    _finished = field_validator("finished_at", mode="after")(
+        lambda value: utc_datetime(value) if value else None
+    )
+
+
 class RunProfileRecord(PersistenceModel):
     run_id: str
     profile_id: str
@@ -363,6 +393,8 @@ class NotificationOutboxRecord(PersistenceModel):
     attempts: int = Field(default=0, ge=0)
     last_error: str | None = None
     next_attempt_at: datetime | None = None
+    notification_type: Literal["matches", "failure"] = "matches"
+    payload: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

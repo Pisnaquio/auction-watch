@@ -42,7 +42,8 @@ class FakeRunEngine:
     def run(self, profile_id: str, *, request_id: str | None, trigger: str) -> RunOutcome:
         self.calls.append((profile_id, request_id))
         now = datetime.now(UTC)
-        if self.operational.get_run(request_id or "") is None:
+        existing = self.operational.get_run(request_id or "")
+        if existing is None:
             self.operational.create_run(
                 RunRecord(
                     run_id=request_id or "fake-run",
@@ -53,11 +54,17 @@ class FakeRunEngine:
                     selected_sources=("bavastro",),
                 )
             )
+        else:
+            self.operational.update_run(
+                existing.model_copy(update={"status": "completed", "finished_at": now})
+            )
         return RunOutcome(request_id or "fake-run", "completed", None, None)
 
 
 def test_profile_api_protects_seed_and_supports_editable_crud(tmp_path: Path) -> None:
-    application = create_app(Settings(data_dir=tmp_path), run_engine_factory=FakeRunEngine)
+    application = create_app(
+        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine
+    )
     with TestClient(application) as client:
         listed = client.get("/api/v1/profiles")
         assert listed.status_code == 200
@@ -113,7 +120,9 @@ def test_profile_api_protects_seed_and_supports_editable_crud(tmp_path: Path) ->
 
 
 def test_run_idempotency_snapshot_and_opportunity_state_api(tmp_path: Path) -> None:
-    application = create_app(Settings(data_dir=tmp_path), run_engine_factory=FakeRunEngine)
+    application = create_app(
+        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine
+    )
     with TestClient(application) as client:
         assert (
             client.post("/api/v1/profiles", json={"profile": profile_payload()}).status_code
@@ -129,13 +138,30 @@ def test_run_idempotency_snapshot_and_opportunity_state_api(tmp_path: Path) -> N
             headers={"Idempotency-Key": "request-1"},
             json={"profile_id": "libros"},
         )
-        assert first.status_code == second.status_code == 200
-        assert first.json()["run_id"] == second.json()["run_id"] == "request-1"
+        assert first.status_code == second.status_code == 202
+        assert first.json()["run_id"] == second.json()["run_id"]
+        run_id = first.json()["run_id"]
+        assert first.json()["status"] == "queued"
+        other_profile = profile_payload("discos")
+        other_profile["name"] = "Discos"
+        assert client.post("/api/v1/profiles", json={"profile": other_profile}).status_code == 201
+        assert (
+            client.post(
+                "/api/v1/runs",
+                headers={"Idempotency-Key": "request-1"},
+                json={"profile_id": "discos"},
+            ).status_code
+            == 409
+        )
         engine = application.state.run_engine
-        assert engine.calls == [("libros", "request-1")]
-        run = client.get("/api/v1/runs/request-1")
+        assert engine.calls == []
+        worker_result = application.state.worker.run_once()
+        assert worker_result is not None
+        run = client.get(f"/api/v1/runs/{run_id}")
         assert run.status_code == 200
         assert run.json()["status"] == "completed"
+        assert client.get("/api/v1/profiles/libros/runs").json()[0]["run_id"] == run_id
+        assert client.get("/api/v1/profiles/libros/notifications").status_code == 200
 
         database = application.state.database
         operational = OperationalRepository(database)
@@ -164,12 +190,12 @@ def test_run_idempotency_snapshot_and_opportunity_state_api(tmp_path: Path) -> N
             )
         )
         operational.record_snapshot(
-            "request-1:snapshot",
-            "request-1",
+            f"{run_id}:snapshot",
+            run_id,
             "hash",
             "completed",
             {
-                "run": {"run_id": "request-1", "status": "completed"},
+                "run": {"run_id": run_id, "status": "completed"},
                     "sources": [
                         {
                             "source_id": "bavastro",
@@ -186,7 +212,7 @@ def test_run_idempotency_snapshot_and_opportunity_state_api(tmp_path: Path) -> N
         )
         snapshot = client.get("/api/v1/profiles/libros/snapshot")
         assert snapshot.status_code == 200
-        assert snapshot.json()["payload"]["run"]["run_id"] == "request-1"
+        assert snapshot.json()["payload"]["run"]["run_id"] == run_id
 
         state = client.post(
             "/api/v1/profiles/libros/opportunities/state",
@@ -201,7 +227,9 @@ def test_run_idempotency_snapshot_and_opportunity_state_api(tmp_path: Path) -> N
 
 
 def test_missing_idempotency_key_and_invalid_opportunity_key_are_rejected(tmp_path: Path) -> None:
-    application = create_app(Settings(data_dir=tmp_path), run_engine_factory=FakeRunEngine)
+    application = create_app(
+        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine
+    )
     with TestClient(application) as client:
         client.post("/api/v1/profiles", json={"profile": profile_payload()})
         assert client.post("/api/v1/runs", json={"profile_id": "libros"}).status_code == 400

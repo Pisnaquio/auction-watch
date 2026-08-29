@@ -1,0 +1,8 @@
+select { width: 100%; margin-top: 6px; border: 1px solid #d8e1e9; border-radius: 7px; padding: 10px; background: #fbfcfe; color: #203044; font: inherit; font-size: 12px; }
+.history { border-top: 1px solid #edf0f3; margin-top: 22px; padding-top: 2px; }
+.history-row { display: flex; gap: 9px; align-items: center; padding: 8px 0; font-size: 11px; color: #526a7f; }
+.history-row small { margin-left: auto; color: #8b9aa8; }
+.run-dot { width: 7px; height: 7px; border-radius: 50%; background: #9aa8b4; }
+.run-dot.completed, .run-dot.sent { background: #3aa486; }
+.run-dot.partial, .run-dot.pending, .run-dot.sending { background: #d5a32d; }
+.run-dot.failed { background: #c85a66; }

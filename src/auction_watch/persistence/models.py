@@ -177,6 +177,31 @@ class RunLeaseRow(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class RunQueueRow(Base):
+    __tablename__ = "run_queue"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_run_queue_idempotency_key"),
+        UniqueConstraint("run_id", name="uq_run_queue_run_id"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'partial', 'failed')",
+            name="ck_run_queue_status",
+        ),
+        CheckConstraint("attempt >= 0", name="ck_run_queue_attempt"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(256), ForeignKey("runs.run_id"), nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(256), ForeignKey("profiles.id"), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    enqueued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+
+
 class RunSourceRow(Base):
     __tablename__ = "run_sources"
     __table_args__ = (
@@ -316,5 +341,7 @@ class NotificationOutboxRow(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notification_type: Mapped[str] = mapped_column(String(16), nullable=False, default="matches")
+    payload_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

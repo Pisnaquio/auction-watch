@@ -1,1 +1,15 @@
-"""Notification integrations; delivery is added in a later task."""
+"""Notification planning and transport contracts."""
+
+from auction_watch.notifications.sender import (
+    FakeNotificationSender,
+    NotificationMessage,
+    NotificationSender,
+    SMTPNotificationSender,
+)
+
+__all__ = [
+    "FakeNotificationSender",
+    "NotificationMessage",
+    "NotificationSender",
+    "SMTPNotificationSender",
+]
