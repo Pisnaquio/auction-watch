@@ -19,11 +19,25 @@ class HttpxTransport:
     def __init__(self, client: httpx.Client | None = None) -> None:
         self.client = client or httpx.Client(follow_redirects=True)
         self._owns_client = client is None
+        self.client.headers["User-Agent"] = "Auction Watch/0.1 (+public source adapter; read-only)"
+        self.client.headers[
+            "Accept"
+        ] = "application/json, text/html, application/rss+xml, application/xml;q=0.9"
 
     def get(self, url: str, *, timeout: float) -> httpx.Response:
-        response = self.client.get(url, timeout=timeout)
-        response.raise_for_status()
-        return response
+        for attempt in range(2):
+            try:
+                response = self.client.get(url, timeout=timeout)
+                if response.status_code in {429, 500, 502, 503, 504} and attempt == 0:
+                    response.close()
+                    continue
+                response.raise_for_status()
+                return response
+            except (httpx.TimeoutException, httpx.NetworkError):
+                if attempt == 0:
+                    continue
+                raise
+        raise RuntimeError("transport retry loop exhausted")
 
     def close(self) -> None:
         if self._owns_client:

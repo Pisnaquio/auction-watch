@@ -24,6 +24,7 @@ from auction_watch.sources.transport import decode_response
 
 BASE_URL = "https://www.remotes.com.uy"
 FEED_URL = f"{BASE_URL}/feed/publicados"
+MAX_PAGES = 1
 
 
 def _tag(node: ElementTree.Element) -> str:

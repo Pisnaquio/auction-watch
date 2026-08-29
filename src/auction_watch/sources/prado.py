@@ -24,6 +24,7 @@ from auction_watch.sources.transport import decode_response, response_headers
 BASE_URL = "https://pradorematesenlinea.uy"
 PRODUCTS_API_URL = f"{BASE_URL}/wp-json/wc/store/v1/products"
 PAGE_SIZE = 100
+MAX_PAGES = 50
 
 
 def parse_price_markup(markup: str) -> tuple[Decimal | None, str]:
@@ -45,16 +46,25 @@ class PradoSource(BaseAuctionSource):
         page = 1
         rows: list[Mapping[str, Any]] = []
         total: int | None = None
+        seen_urls: set[str] = set()
         while True:
+            if page > MAX_PAGES:
+                raise ValueError("Prado pagination exceeded page limit")
             query = urlencode({"page": page, "per_page": PAGE_SIZE, "stock_status": "instock"})
             url = f"{PRODUCTS_API_URL}?{query}"
+            if url in seen_urls:
+                raise ValueError("Prado pagination next cycle")
+            seen_urls.add(url)
             response = self.transport.get(url, timeout=self.timeout)
             payload = decode_response(response)
             if not isinstance(payload, list):
                 raise ValueError("Prado products response is not a JSON array")
             rows.extend(item for item in payload if isinstance(item, Mapping))
             try:
-                total = int(response_headers(response).get("X-WP-TotalPages") or 0) or total
+                declared_total = int(response_headers(response).get("X-WP-TotalPages") or 0) or None
+                if declared_total is not None and declared_total > MAX_PAGES:
+                    raise ValueError("Prado declared page total is absurd")
+                total = declared_total or total
             except (TypeError, ValueError):
                 pass
             if total is not None and page >= total:

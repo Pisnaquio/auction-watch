@@ -186,7 +186,6 @@ class OperationalRepository:
         group_id: str,
         lots: list[LotRecord],
         *,
-        authoritative: bool | None = None,
         observed_at: datetime | None = None,
     ) -> list[OpportunityLifecycle]:
         """Upsert one group using only its persisted coverage receipt as authority."""

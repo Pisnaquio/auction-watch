@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from inspect import signature
 from pathlib import Path
 
 import pytest
@@ -117,7 +118,7 @@ def test_receipts_user_state_and_outbox_are_durable_and_deduplicated(operational
             finished_at=NOW,
         )
     )
-    repository.reconcile_group("run-1", "remotes", "auction:1", [lot("a")], authoritative=True)
+    repository.reconcile_group("run-1", "remotes", "auction:1", [lot("a")])
     state = UserOpportunityState(
         profile_id="consolas",
         source_id="remotes",
@@ -186,6 +187,10 @@ def test_reconciliation_requires_matching_receipt_and_is_idempotent(operational)
     assert removed.removed_at == NOW
     assert removed.last_absence_run_id == "run-1"
     database.dispose()
+
+
+def test_reconciliation_has_no_caller_authority_parameter() -> None:
+    assert "authoritative" not in signature(OperationalRepository.reconcile_group).parameters
 
 
 def test_outbox_deduplication_survives_concurrent_inserts(operational) -> None:

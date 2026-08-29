@@ -21,6 +21,7 @@ from auction_watch.sources.transport import decode_response, response_headers
 API_BASE = "https://api-parseo.bavastronline.com/published_auctions"
 WEB_BASE = "https://www.bavastronline.com.uy"
 PAGE_SIZE = 100
+MAX_PAGES = 50
 
 
 class BavastroSource(BaseAuctionSource):
@@ -34,6 +35,13 @@ class BavastroSource(BaseAuctionSource):
 
     @staticmethod
     def _next(payload: Mapping[str, Any], page: int, url: str) -> str | None:
+        declared_pages = payload.get("total_pages") or payload.get("page_count")
+        if (
+            declared_pages is not None
+            and str(declared_pages).isdigit()
+            and int(declared_pages) > MAX_PAGES
+        ):
+            raise ValueError("Bavastro declared page total is absurd")
         next_url = payload.get("next")
         if next_url:
             return absolute_url(url, next_url)
@@ -46,7 +54,13 @@ class BavastroSource(BaseAuctionSource):
         page = 1
         url: str | None = f"{API_BASE}/?page={page}&limit={PAGE_SIZE}"
         rows: list[Mapping[str, Any]] = []
+        seen_urls: set[str] = set()
         while url:
+            if url in seen_urls:
+                raise ValueError("Bavastro discovery next cycle")
+            if page > MAX_PAGES:
+                raise ValueError("Bavastro discovery exceeded page limit")
+            seen_urls.add(url)
             payload, _headers = self._json(url)
             if not isinstance(payload, Mapping) or not isinstance(payload.get("results"), list):
                 raise ValueError("Bavastro listing lacks results")
@@ -69,7 +83,13 @@ class BavastroSource(BaseAuctionSource):
         page = 1
         url: str | None = f"{API_BASE}/{auction_id}/lots/published/?page={page}&page_size=50"
         rows: list[Mapping[str, Any]] = []
+        seen_urls: set[str] = set()
         while url:
+            if url in seen_urls:
+                raise ValueError(f"Bavastro lots for {auction_id} next cycle")
+            if page > MAX_PAGES:
+                raise ValueError(f"Bavastro lots for {auction_id} exceeded page limit")
+            seen_urls.add(url)
             payload, _headers = self._json(url)
             if not isinstance(payload, Mapping) or not isinstance(payload.get("results"), list):
                 raise ValueError(f"Bavastro lots for {auction_id} lack results")

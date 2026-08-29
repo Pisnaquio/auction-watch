@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
 from auction_watch.sources import (
@@ -22,6 +23,7 @@ from auction_watch.sources.bavastro import API_BASE
 from auction_watch.sources.castells import LOTS_URL
 from auction_watch.sources.prado import PRODUCTS_API_URL as PRADO_PRODUCTS_URL
 from auction_watch.sources.todoremates import PRODUCTS_API_URL, REMATES_API_URL
+from auction_watch.sources.transport import HttpxTransport
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -89,6 +91,15 @@ def test_bavastro_real_json_api_covers_lot_pagination() -> None:
     assert result.receipts[0].status == "complete"
     assert result.receipts[1].status == "failed"
     assert all(timeout == 4 for _url, timeout in transport.calls)
+
+
+def test_bavastro_next_cycle_fails_closed() -> None:
+    url = f"{API_BASE}/?page=1&limit=100"
+    result = BavastroSource(
+        FakeTransport(lambda _url: FakeResponse(payload={"results": [], "next": url}))
+    ).scan()
+    assert result.discovery_status == "failed"
+    assert result.inventory_authoritative is False
 
 
 def test_castells_requires_html_gxstate_and_reads_lots_endpoint() -> None:
@@ -178,6 +189,15 @@ def test_todoremates_missing_second_page_is_not_authoritative() -> None:
     assert calls == 2
 
 
+def test_wordpress_absurd_page_total_is_rejected() -> None:
+    response = FakeResponse(
+        payload=load_json("todoremates_terms.json"), headers={"X-WP-TotalPages": "51"}
+    )
+    result = TodoRematesSource(FakeTransport(lambda _url: response)).scan()
+    assert result.discovery_status == "failed"
+    assert result.inventory_authoritative is False
+
+
 def test_prado_uses_woocommerce_products_and_filters_non_auctions() -> None:
     transport = FakeTransport(
         lambda url: FakeResponse(
@@ -196,6 +216,24 @@ def test_prado_structural_marker_drift_fails_closed() -> None:
     result = PradoSource(FakeTransport(lambda _url: FakeResponse(payload={"products": []}))).scan()
     assert result.discovery_status == "failed"
     assert result.inventory_authoritative is False
+
+
+def test_transport_sets_public_headers_and_retries_transient_status_once() -> None:
+    statuses = iter((503, 200))
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(next(statuses), request=request, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    transport = HttpxTransport(client)
+    response = transport.get("https://example.test/public", timeout=2)
+    assert response.status_code == 200
+    assert len(requests) == 2
+    assert "Auction Watch/0.1" in requests[0].headers["user-agent"]
+    assert "application/json" in requests[0].headers["accept"]
+    client.close()
 
 
 def test_registry_selection_and_duplicate_detection_remain_deterministic() -> None:

@@ -20,6 +20,7 @@ WEB_BASE = "https://subastascastells.com/"
 HOME_URL = urljoin(WEB_BASE, "frontend.home.aspx")
 LOTS_URL = urljoin(WEB_BASE, "rest/API/Remate/lotes")
 LOT_LIMIT = 9999
+MAX_PAGES = 50
 
 
 def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
@@ -57,7 +58,15 @@ class CastellsSource(BaseAuctionSource):
         }
         rows: list[Mapping[str, Any]] = []
         request_url = f"{LOTS_URL}?{urlencode(params)}"
+        seen_urls: set[str] = set()
+        page = 0
         while True:
+            page += 1
+            if request_url in seen_urls:
+                raise ValueError("Castells lots next cycle")
+            if page > MAX_PAGES:
+                raise ValueError("Castells lots exceeded page limit")
+            seen_urls.add(request_url)
             response = self.transport.get(request_url, timeout=self.timeout)
             payload = decode_response(response)
             if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):

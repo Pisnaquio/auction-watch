@@ -23,6 +23,7 @@ BASE_URL = "https://todoremates.com.uy"
 REMATES_API_URL = f"{BASE_URL}/wp-json/wp/v2/remate"
 PRODUCTS_API_URL = f"{BASE_URL}/wp-json/wc/store/v1/products"
 PAGE_SIZE = 100
+MAX_PAGES = 50
 
 
 class TodoRematesSource(BaseAuctionSource):
@@ -49,9 +50,18 @@ class TodoRematesSource(BaseAuctionSource):
         page = 1
         rows: list[Mapping[str, Any]] = []
         total: int | None = None
+        seen_urls: set[str] = set()
         while True:
+            if page > MAX_PAGES:
+                raise ValueError("TodoRemates pagination exceeded page limit")
+            request_url = f"{url}?{urlencode({'page': page, 'per_page': PAGE_SIZE, **params})}"
+            if request_url in seen_urls:
+                raise ValueError("TodoRemates pagination next cycle")
+            seen_urls.add(request_url)
             current, declared_total = self._page(url, page, **params)
             total = declared_total or total
+            if total is not None and total > MAX_PAGES:
+                raise ValueError("TodoRemates declared page total is absurd")
             rows.extend(current)
             if total is not None:
                 if page >= total:
