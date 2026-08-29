@@ -17,7 +17,11 @@ from auction_watch import __version__
 from auction_watch.config import Settings, get_settings
 from auction_watch.persistence.database import Database
 from auction_watch.persistence.migrations import upgrade_head
+from auction_watch.persistence.operational_repository import OperationalRepository
 from auction_watch.persistence.repository import ProfileRepository
+from auction_watch.profiles.seed import consoles_profile
+from auction_watch.runner import AuctionRunEngine
+from auction_watch.server.profiles import router as profiles_router
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +33,10 @@ def _web_dist() -> Path:
     return Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    run_engine_factory: Any = AuctionRunEngine,
+) -> FastAPI:
     """Create an application without opening SQLite during import."""
 
     @asynccontextmanager
@@ -50,14 +57,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else:
                 application.state.database = database
                 application.state.profile_repository = ProfileRepository(database)
+                application.state.profile_repository.seed_system_profile(consoles_profile())
+                application.state.operational_repository = OperationalRepository(database)
+                application.state.run_engine = run_engine_factory(
+                    database,
+                    profile_repository=application.state.profile_repository,
+                    operational_repository=application.state.operational_repository,
+                )
             yield
         finally:
             if database is not None:
                 database.dispose()
             application.state.database = None
             application.state.profile_repository = None
+            application.state.operational_repository = None
+            application.state.run_engine = None
 
     application = FastAPI(title="Auction Watch", version=__version__, lifespan=lifespan)
+    application.include_router(profiles_router)
     web_dist = _web_dist()
     if web_dist.is_dir() and (web_dist / "assets").is_dir():
         application.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")

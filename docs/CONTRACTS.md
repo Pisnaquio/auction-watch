@@ -67,3 +67,14 @@ The trigger, selected sources, and exact profile revisions are persisted for
 reproducibility. No caller-provided authority boolean can override persisted
 source or group receipts. Snapshots are canonical JSON derived from reconciled
 SQLite state and exclude transport payloads, credentials, and UI-only state.
+
+## Versioned API and client
+
+The `/api/v1` boundary accepts complete `SearchProfile` values for create and
+revision-checked update operations. The `consolas` system seed is surfaced as a
+protected profile: it may be paused or cloned, but its identity and seed
+metadata cannot be edited or deleted. Manual runs require an `Idempotency-Key`;
+the run engine remains the only authority for receipts, reconciliation,
+matching, and snapshots. The React client reads profiles and canonical
+snapshots from this API and sends follow, dismiss, and restore decisions back
+through it. It does not use browser storage as an inventory or snapshot source.

@@ -179,6 +179,17 @@ class OperationalRepository:
                 selected_sources=tuple(row.selected_sources),
             )
 
+    def run_profile_ids(self, run_id: str) -> tuple[str, ...]:
+        """Return the profiles bound to a run in their persisted order."""
+
+        with self._database.sessions.begin() as session:
+            rows = session.scalars(
+                select(RunProfileRow)
+                .where(RunProfileRow.run_id == run_id)
+                .order_by(RunProfileRow.position, RunProfileRow.profile_id)
+            ).all()
+            return tuple(row.profile_id for row in rows)
+
     def update_run(self, run: RunRecord) -> None:
         with self._database.sessions.begin() as session:
             row = session.get(RunRow, run.run_id)
@@ -563,6 +574,14 @@ class OperationalRepository:
                 )
                 for row in rows
             ]
+
+    def lot_exists(self, source_id: str, auction_id: str, lot_id: str) -> bool:
+        """Return whether an opportunity identity is present in reconciled storage."""
+
+        with self._database.sessions.begin() as session:
+            return (
+                session.get(AuctionLotRow, (source_id, auction_id, lot_id)) is not None
+            )
 
     @staticmethod
     def _lot_record(row: AuctionLotRow) -> LotRecord:

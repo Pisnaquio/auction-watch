@@ -68,3 +68,11 @@ their previous inventory. Failed runs do not replace the last snapshot.
 
 The scheduler helper only determines due profiles. It does not start a daemon,
 perform network work, or send notifications.
+
+The versioned profile API and React web client expose this durable boundary:
+profile CRUD uses optimistic revisions, manual runs require an idempotency key,
+snapshots are read from persisted reconciled state, and opportunity decisions
+are written through the operational repository. A timeout or partial run is
+shown as degraded coverage by the client, never as an authoritative empty
+result. Daemon scheduling, email, and Home Assistant deployment remain outside
+this task.

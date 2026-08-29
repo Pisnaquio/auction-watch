@@ -27,6 +27,7 @@ _CURRENCY = re.compile(r"[A-Z]{3}\Z")
 _SEARCH_FIELDS = frozenset({"title", "description", "category"})
 _VALID_REJECTIONS = frozenset(
     {
+        "category_not_selected",
         "profile_disabled",
         "source_not_selected",
         "lot_inactive",
@@ -280,6 +281,7 @@ class SearchProfile(DomainModel):
     keywords_all: tuple[str, ...] = ()
     exact_phrases: tuple[str, ...] = ()
     exclude_keywords: tuple[str, ...] = ()
+    categories: tuple[str, ...] = ()
     boost_keywords: dict[str, StrictInt] = Field(default_factory=dict)
     risk_keywords: dict[str, StrictInt] = Field(default_factory=dict)
     context_rules: tuple[ContextRule, ...] = ()
@@ -317,7 +319,12 @@ class SearchProfile(DomainModel):
         return _nonempty_text(value, "name")
 
     @field_validator(
-        "keywords_any", "keywords_all", "exact_phrases", "exclude_keywords", mode="before"
+        "keywords_any",
+        "keywords_all",
+        "exact_phrases",
+        "exclude_keywords",
+        "categories",
+        mode="before",
     )
     @classmethod
     def normalize_keyword_lists(cls, value: object) -> tuple[str, ...]:

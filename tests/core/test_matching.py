@@ -99,6 +99,16 @@ def test_boost_increases_score_but_cannot_trigger_a_match_alone() -> None:
     assert result.rejection_reasons == ("no_positive_trigger",)
 
 
+def test_category_filter_rejects_lots_outside_selected_categories() -> None:
+    profile = make_profile(categories=["Música"])
+    included = match_lot(profile, make_lot(category="Música y cultura"))
+    excluded = match_lot(profile, make_lot(category="Decoración"))
+
+    assert included.matched is True
+    assert excluded.matched is False
+    assert excluded.rejection_reasons == ("category_not_selected",)
+
+
 def test_boost_applies_once_when_a_positive_rule_already_matches() -> None:
     profile = make_profile(boost_keywords={"spinetta": 10})
     result = match_lot(profile, make_lot())

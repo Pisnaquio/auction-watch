@@ -158,6 +158,17 @@ def match_lot(profile: SearchProfile, lot: AuctionLot) -> MatchResult:
             explanation="Descartado porque el lote no está activo.",
         )
 
+    if profile.categories and not any(
+        contains_term(normalize_text(lot.category), category) for category in profile.categories
+    ):
+        return _result(
+            profile,
+            lot,
+            matched=False,
+            rejection_reasons=("category_not_selected",),
+            explanation="Descartado porque la categoría no está seleccionada en el perfil.",
+        )
+
     fields = _field_texts(lot)
     found: dict[str, _FoundRule] = {}
     excluded: dict[str, _FoundRule] = {}

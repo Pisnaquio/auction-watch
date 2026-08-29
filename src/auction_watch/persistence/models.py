@@ -57,6 +57,7 @@ class ProfileRow(Base):
     keywords_all: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     exact_phrases: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     exclude_keywords: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    categories: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     boost_keywords: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
     risk_keywords: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
     context_rules: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
