@@ -5,10 +5,11 @@ listings. The engine is intentionally generic: source adapters provide
 normalized auction data and user profiles provide the search behavior.
 
 The current foundation includes strict domain contracts and matching,
-durable SQLite persistence, a locked public `consolas` system profile, and
-generic adapters for Bavastro, Castells, Remotes, TodoRemates, and Prado.
-Scheduling, HTTP profile endpoints, notification delivery, and Home Assistant
-packaging remain separate future tasks.
+durable SQLite persistence, a locked public `consolas` system profile, generic
+adapters for Bavastro, Castells, Remotes, TodoRemates, and Prado, and a
+transactional run engine with durable leases and canonical snapshots.
+HTTP profile endpoints, a daemon scheduler, notification delivery, a complete
+UI, and Home Assistant packaging remain separate future tasks.
 
 ## Local development
 

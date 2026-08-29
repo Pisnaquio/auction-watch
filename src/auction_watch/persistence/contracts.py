@@ -147,7 +147,7 @@ class LotRecord(PersistenceModel):
 
 class RunRecord(PersistenceModel):
     run_id: str
-    status: Literal["pending", "running", "succeeded", "degraded", "failed"]
+    status: Literal["queued", "running", "completed", "partial", "failed"]
     started_at: datetime
     finished_at: datetime | None = None
     error: str | None = None
@@ -155,6 +155,31 @@ class RunRecord(PersistenceModel):
     _started = field_validator("started_at", mode="after")(utc_datetime)
     _finished = field_validator("finished_at", mode="after")(
         lambda value: utc_datetime(value) if value else None
+    )
+    trigger: Literal["manual", "scheduled", "system"] = "manual"
+    selected_sources: tuple[str, ...] = ()
+
+    @field_validator("selected_sources", mode="before")
+    @classmethod
+    def validate_selected_sources(cls, value: object) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, (str, set)) or not isinstance(value, (list, tuple)):
+            raise ValueError("selected_sources must be a list or tuple")
+        values = tuple(canonical_slug(item, "source_id") for item in value)
+        if len(values) != len(set(values)):
+            raise ValueError("selected_sources must not contain duplicates")
+        return values
+
+
+class RunProfileRecord(PersistenceModel):
+    run_id: str
+    profile_id: str
+    revision: int = Field(ge=1)
+    position: int = Field(ge=0)
+
+    _profile = field_validator("profile_id", mode="before")(
+        lambda value: canonical_slug(value, "profile_id")
     )
 
 
@@ -263,6 +288,18 @@ class ProfileMatchRecord(PersistenceModel):
     _lot = field_validator("lot_id", mode="before")(lambda value: external_id(value, "lot_id"))
     _first = field_validator("first_seen_at", mode="after")(utc_datetime)
     _last = field_validator("last_seen_at", mode="after")(utc_datetime)
+    active: bool = True
+    first_match_at: datetime | None = None
+    last_match_at: datetime | None = None
+    confirmed_match_run_id: str | None = None
+    confirmed_absence_run_id: str | None = None
+
+    _first_match = field_validator("first_match_at", mode="after")(
+        lambda value: utc_datetime(value) if value else None
+    )
+    _last_match = field_validator("last_match_at", mode="after")(
+        lambda value: utc_datetime(value) if value else None
+    )
     _terms = field_validator("matched_terms", mode="before")(_terms)
 
     @field_validator("matched_fields", mode="before")

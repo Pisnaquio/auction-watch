@@ -143,15 +143,37 @@ class RunRow(Base):
     __tablename__ = "runs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'running', 'succeeded', 'degraded', 'failed')",
+            "status IN ('queued', 'running', 'completed', 'partial', 'failed')",
             name="ck_runs_status",
         ),
+        CheckConstraint("trigger IN ('manual', 'scheduled', 'system')", name="ck_runs_trigger"),
     )
     run_id: Mapped[str] = mapped_column(String(256), primary_key=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
+    selected_sources: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+
+
+class RunProfileRow(Base):
+    __tablename__ = "run_profiles"
+    run_id: Mapped[str] = mapped_column(String(256), ForeignKey("runs.run_id"), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("profiles.id"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class RunLeaseRow(Base):
+    __tablename__ = "run_leases"
+    __table_args__ = (UniqueConstraint("run_id", name="uq_run_leases_run_id"),)
+    lease_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class RunSourceRow(Base):
@@ -240,6 +262,15 @@ class ProfileMatchRow(Base):
     matched_fields: Mapped[dict[str, list[str]]] = mapped_column(JSON, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    first_match_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_match_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_match_run_id: Mapped[str | None] = mapped_column(
+        String(256), ForeignKey("runs.run_id")
+    )
+    confirmed_absence_run_id: Mapped[str | None] = mapped_column(
+        String(256), ForeignKey("runs.run_id")
+    )
 
 
 class UserOpportunityStateRow(Base):

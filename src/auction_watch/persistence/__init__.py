@@ -7,6 +7,7 @@ from auction_watch.persistence.contracts import (
     NotificationOutboxRecord,
     OpportunityLifecycle,
     ProfileMatchRecord,
+    RunProfileRecord,
     RunRecord,
     SourceRecord,
     SourceRunRecord,
@@ -18,6 +19,7 @@ from auction_watch.persistence.operational_repository import (
     OperationalPersistenceError,
     OperationalRepository,
     ReconciliationReceiptError,
+    RunLeaseBusyError,
     UserStateRevisionConflict,
 )
 from auction_watch.persistence.repository import (
@@ -41,6 +43,7 @@ __all__ = [
     "OperationalPersistenceError",
     "OperationalRepository",
     "ReconciliationReceiptError",
+    "RunLeaseBusyError",
     "OpportunityLifecycle",
     "ProfileAlreadyExistsError",
     "ProfileNotFoundError",
@@ -53,6 +56,7 @@ __all__ = [
     "StoredProfile",
     "ProfileMatchRecord",
     "RunRecord",
+    "RunProfileRecord",
     "SourceRecord",
     "SourceRunRecord",
     "UserOpportunityState",

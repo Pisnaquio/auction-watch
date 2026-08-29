@@ -61,3 +61,9 @@ Persistence contracts cover runs, source results, coverage, lifecycle,
 profile matches, user decisions, snapshots, and notification outbox records.
 They validate the same identities and UTC timestamps before SQLAlchemy rows are
 written. See `docs/PERSISTENCE.md` for schema and reconciliation invariants.
+
+Run records use `queued`, `running`, `completed`, `partial`, and `failed`.
+The trigger, selected sources, and exact profile revisions are persisted for
+reproducibility. No caller-provided authority boolean can override persisted
+source or group receipts. Snapshots are canonical JSON derived from reconciled
+SQLite state and exclude transport payloads, credentials, and UI-only state.

@@ -57,6 +57,7 @@ class FakeTransport:
         *,
         timeout: float,
         headers: Mapping[str, str] | None = None,
+        deadline: float | None = None,
     ) -> FakeResponse:
         self.calls.append((url, timeout))
         self.request_headers.append(dict(headers or {}))
@@ -463,6 +464,22 @@ def test_transport_sets_public_headers_and_retries_transient_status_once() -> No
     assert len(requests) == 2
     assert "Auction Watch/0.1" in requests[0].headers["user-agent"]
     assert "application/json" in requests[0].headers["accept"]
+    client.close()
+
+
+def test_transport_retry_respects_absolute_deadline() -> None:
+    requests: list[httpx.Request] = []
+    clock_values = iter((0.0, 1.1))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ReadTimeout("timeout", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    transport = HttpxTransport(client, clock=lambda: next(clock_values))
+    with pytest.raises(RuntimeError, match="deadline"):
+        transport.get("https://example.test/public", timeout=5, deadline=1.0)
+    assert len(requests) == 1
     client.close()
 
 

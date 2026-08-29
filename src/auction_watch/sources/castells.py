@@ -102,7 +102,11 @@ class CastellsSource(BaseAuctionSource):
                 raise RuntimeError("Castells scan request budget exhausted")
             self._request_count += 1
         return decode_response(
-            self.transport.get(url, timeout=min(self.timeout, remaining))
+            self.transport.get(
+                url,
+                timeout=min(self.timeout, remaining),
+                deadline=self._deadline,
+            )
         )
 
     def _fetch_lots(

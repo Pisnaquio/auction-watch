@@ -15,6 +15,8 @@ profiles and source adapters.
 - `server` owns HTTP API and readiness integration.
 - `notifications` owns delivery after an outbox record is durably created.
 - `web` is a client of the versioned API.
+- `runner` is the only layer that coordinates profiles, sources, persistence,
+  receipts, reconciliation, matching, lifecycle and snapshots.
 
 The engine does not know whether a profile describes consoles, books, tools,
 records, or another category. Sources do not know profiles, matching, email,
@@ -51,5 +53,18 @@ layers remain unchanged.
 SQLite lives at `${AW_DATA_DIR}/auction-watch.sqlite3`. Alembic is the only
 schema authority, and packaged migrations are resolved independently of the
 checkout or current working directory. Docker and the future Home Assistant
-add-on use the same application core; this repository makes no operational
-deployment or Home Assistant compatibility claim.
+add-on use the same application core; the run engine itself does not contact
+Home Assistant, send email, start a daemon, or execute real scans in tests.
+
+## Run engine boundary
+
+`AuctionRunEngine` acquires a durable SQLite lease, records selected profile
+revisions and the union of required sources, constructs each adapter once,
+persists source results and receipts, reconciles groups only from persisted
+receipts, matches the reconciled active inventory, and publishes a
+hash-addressed snapshot. Complete authoritative discovery may close omitted
+groups; partial, failed, timed-out, or structurally uncertain sources preserve
+their previous inventory. Failed runs do not replace the last snapshot.
+
+The scheduler helper only determines due profiles. It does not start a daemon,
+perform network work, or send notifications.

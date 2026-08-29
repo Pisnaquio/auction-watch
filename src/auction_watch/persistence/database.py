@@ -43,7 +43,8 @@ def create_sqlite_engine(data_dir: Path) -> Engine:
 
     @event.listens_for(engine, "begin")
     def begin_explicit_transaction(connection: Connection) -> None:
-        connection.exec_driver_sql("BEGIN")
+        statement = "BEGIN IMMEDIATE" if connection.info.pop("begin_immediate", False) else "BEGIN"
+        connection.exec_driver_sql(statement)
 
     return engine
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from time import monotonic
 from typing import Any, Protocol
 
 import httpx
@@ -15,6 +16,7 @@ class Transport(Protocol):
         *,
         timeout: float,
         headers: Mapping[str, str] | None = None,
+        deadline: float | None = None,
     ) -> Any:
         """Return a response-like object or decoded mapping."""
 
@@ -25,9 +27,12 @@ class HttpxTransport:
     def __init__(
         self,
         client: httpx.Client | None = None,
+        *,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self.client = client or httpx.Client(follow_redirects=True)
         self._owns_client = client is None
+        self.clock = clock
         self.client.headers["User-Agent"] = "Auction Watch/0.1 (+public source adapter; read-only)"
         self.client.headers[
             "Accept"
@@ -39,17 +44,25 @@ class HttpxTransport:
         *,
         timeout: float,
         headers: Mapping[str, str] | None = None,
+        deadline: float | None = None,
     ) -> httpx.Response:
         for attempt in range(2):
+            request_timeout = timeout
+            if deadline is not None:
+                request_timeout = min(timeout, deadline - self.clock())
+                if request_timeout <= 0:
+                    raise RuntimeError("transport deadline exceeded")
             try:
-                response = self.client.get(url, timeout=timeout, headers=headers)
+                response = self.client.get(url, timeout=request_timeout, headers=headers)
                 if response.status_code in {429, 500, 502, 503, 504} and attempt == 0:
                     response.close()
                     continue
                 response.raise_for_status()
                 return response
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if attempt == 0:
+                    if deadline is not None and deadline - self.clock() <= 0:
+                        raise RuntimeError("transport deadline exceeded") from exc
                     continue
                 raise
         raise RuntimeError("transport retry loop exhausted")

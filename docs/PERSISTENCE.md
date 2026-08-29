@@ -20,6 +20,8 @@ The migration chain is:
   states, and notification outbox;
 - `0003_profile_kinds`: system/user profile metadata and versioned seed fields.
 - `0004_contextual_profile_rules`: reusable risk weights and context gates.
+- `0005_run_engine`: run provenance, profile revisions, durable leases, and
+  historical profile matches.
 
 Upgrades are safe to run repeatedly. Each engine enables foreign keys, WAL,
 busy timeout, and explicit transaction boundaries. All timestamps are stored
@@ -32,18 +34,22 @@ column with currency kept separately; URLs are validated before persistence.
 is never copied per profile. `auction_groups` stores the source's stable group
 metadata. `sources` stores public adapter metadata and enablement.
 
-`runs` records the lifecycle of a manual or scheduled scan. `run_sources`
+`runs` records the lifecycle of a manual, scheduled, or system run using
+`queued`, `running`, `completed`, `partial`, or `failed`. `run_profiles` stores
+the exact profile revision used, and `run_leases` provides durable expiry-based
+cross-process exclusion. `run_sources`
 records independent source status, discovered/processed/failed counts, and
 whether that source result is authoritative. `coverage_receipts` records the
 same decision at group granularity with `complete`, `partial`, or `failed`
-coverage. `auction_snapshots` is an immutable publication payload associated
-with a run.
+coverage. `auction_snapshots` is an immutable, hash-addressed publication
+payload associated with a run.
 
 `opportunities` stores lifecycle separately from the normalized lot. It keeps
 `first_seen_at`, `last_seen_at`, `seen_count`, active/removed state,
 `removed_at`, and the last run that confirmed presence or authoritative
 absence. `profile_matches` stores one match per profile and lot, including
-score, matched terms/fields, and timestamps.
+score, matched terms/fields, active state, first/last match times, and runs
+that confirmed presence or absence.
 
 `user_opportunity_states` is keyed by profile plus lot, so following or
 dismissing an opportunity in one profile never changes another profile. Its
@@ -69,9 +75,21 @@ not.
 
 The source layer is responsible for proving this authority with a
 `SourceScanResult` and per-group `GroupReceipt`; the persistence layer accepts
-only the explicit boolean supplied by orchestration. This keeps parsing,
-matching, and storage independent and makes the destructive transition
-reviewable.
+authority only after the matching receipt is persisted. Complete authoritative
+source discovery may close omitted groups. Partial or failed discovery cannot
+close them. This keeps parsing, matching, and storage independent and makes
+destructive transitions reviewable.
+
+## Run engine transaction boundary
+
+`AuctionRunEngine` is the sole coordinator. It scans each selected source once
+per run, persists source and group receipts before reconciliation, evaluates
+the active reconciled inventory against every selected profile, and creates a
+snapshot only after that logical sequence succeeds. A run with no verifiable
+source state is failed and leaves the previous snapshot untouched; a degraded
+run publishes a partial snapshot with its coverage limitations. API, daemon
+scheduling, email, complete UI integration, and Home Assistant deployment are
+outside this task.
 
 ## Transaction and repository rules
 
