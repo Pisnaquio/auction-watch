@@ -6,6 +6,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
 from typing import Any
@@ -25,7 +26,9 @@ from auction_watch.persistence.operational_repository import OperationalReposito
 from auction_watch.persistence.repository import ProfileRepository
 from auction_watch.profiles.seed import consoles_profile
 from auction_watch.runner import AuctionRunEngine
+from auction_watch.scheduler import enqueue_due_profiles
 from auction_watch.server.profiles import router as profiles_router
+from auction_watch.server.security import IngressSecurityMiddleware
 from auction_watch.worker import AuctionWatchWorker, NotificationDeliveryWorker, RunWorker
 
 logger = logging.getLogger(__name__)
@@ -77,14 +80,28 @@ def create_app(
                     host=runtime_settings.smtp_host,
                     port=runtime_settings.smtp_port,
                     sender=runtime_settings.smtp_sender,
-                    recipient=runtime_settings.smtp_recipient,
+                    recipient=(
+                        runtime_settings.smtp_recipient if runtime_settings.smtp_enabled else None
+                    ),
                     username=runtime_settings.smtp_username,
                     password=runtime_settings.smtp_password,
                     use_tls=runtime_settings.smtp_use_tls,
                 )
                 planner = NotificationPlanner(
-                    notifications, recipient=runtime_settings.smtp_recipient
+                    notifications,
+                    recipient=(
+                        runtime_settings.smtp_recipient if runtime_settings.smtp_enabled else None
+                    ),
                 )
+                schedule_once = None
+                if runtime_settings.scheduler_enabled:
+                    def schedule_once() -> object:
+                        return enqueue_due_profiles(
+                            application.state.profile_repository,
+                            queue,
+                            now=datetime.now(UTC),
+                        )
+
                 worker = AuctionWatchWorker(
                     RunWorker(
                         application.state.run_engine,
@@ -94,6 +111,7 @@ def create_app(
                         planner,
                     ),
                     NotificationDeliveryWorker(notifications, sender),
+                    schedule_once=schedule_once,
                 )
                 application.state.run_queue = queue
                 application.state.notifications = notifications
@@ -123,6 +141,7 @@ def create_app(
             application.state.worker = None
 
     application = FastAPI(title="Auction Watch", version=__version__, lifespan=lifespan)
+    application.add_middleware(IngressSecurityMiddleware)
     application.include_router(profiles_router)
     web_dist = _web_dist()
     if web_dist.is_dir() and (web_dist / "assets").is_dir():

@@ -1,29 +1,32 @@
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.12
+
 FROM node:22-alpine AS frontend-build
 WORKDIR /build/web
-COPY web/package.json web/package-lock.json* ./
-RUN npm install
-COPY web/ ./
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY web/index.html web/tsconfig.json web/vite.config.ts ./
+COPY web/src ./src
 RUN npm run build
 
-FROM python:3.12-slim AS runtime
+FROM ${BUILD_FROM} AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    AW_DATA_DIR=/data \
-    AW_HOST=0.0.0.0 \
+    AW_DATA_DIR=/data/auction-watch \
+    AW_HOST=127.0.0.1 \
     AW_PORT=8789 \
-    AW_WEB_DIST=/app/web/dist
-WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY src ./src
-RUN pip install --no-cache-dir .
-COPY --from=frontend-build /build/web/dist /app/web/dist
-COPY alembic.ini ./
-RUN addgroup --system app && adduser --system --ingroup app app \
-    && mkdir -p /data \
-    && chown -R app:app /app /data
-USER app
+    AW_WEB_DIST=/opt/auction-watch/web/dist \
+    AW_WORKER_ENABLED=true \
+    AW_SCHEDULER_ENABLED=false \
+    AW_SMTP_ENABLED=false
+WORKDIR /opt/auction-watch
+COPY pyproject.toml README.md /build/app/
+COPY src /build/app/src
+RUN pip install --no-cache-dir /build/app
+COPY --from=frontend-build /build/web/dist /opt/auction-watch/web/dist
+COPY rootfs /
+RUN mkdir -p /data/auction-watch
 VOLUME ["/data"]
 EXPOSE 8789
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8789/api/v1/readiness', timeout=3)"
-CMD ["uvicorn", "auction_watch.main:app", "--host", "0.0.0.0", "--port", "8789"]
+CMD ["/init"]

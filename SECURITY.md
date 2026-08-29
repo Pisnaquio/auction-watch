@@ -19,3 +19,7 @@ personal data, or live service details in a report.
 - Future webhook delivery must validate destinations and prevent SSRF.
 - Logs and exported artifacts must be safe to share and must not contain secret
   values.
+- The Home Assistant add-on exposes the API through Supervisor ingress and a
+  same-origin guard; it does not publish a host port by default. Supervisor
+  options, especially SMTP credentials, are sensitive and must never be
+  requested or printed through raw diagnostics.

@@ -107,8 +107,9 @@ snapshot only after that logical sequence succeeds. A run with no verifiable
 source state is failed and leaves the previous snapshot untouched; a degraded
 run publishes a partial snapshot with its coverage limitations. The API
 enqueues work and exposes durable progress, while the optional worker and
-notification sender consume those records. Home Assistant deployment and real
-external scans remain outside this task.
+notification sender consume those records. The Home Assistant add-on runs the
+same migration chain under `/data/auction-watch`; installation itself does not
+perform external scans or send notifications.
 
 ## Transaction and repository rules
 

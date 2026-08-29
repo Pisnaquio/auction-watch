@@ -1,5 +1,10 @@
 # Home Assistant packaging
 
-Reserved for the future Home Assistant add-on metadata. The add-on will use the
-same application core and container image; no Home Assistant integration is
-implemented in the foundation task.
+The formal add-on metadata now lives at the repository root in `config.yaml`,
+with the image definition in `Dockerfile` and supervised services under
+`rootfs/`. This directory remains a short pointer for repository browsers.
+
+See [../../docs/addon.md](../../docs/addon.md) for installation, configuration,
+backup/restoration, notification guarantees, and safe troubleshooting. The
+add-on is independent of Consolas and persists only under
+`/data/auction-watch`.

@@ -8,8 +8,10 @@ The current foundation includes strict domain contracts and matching,
 durable SQLite persistence, a locked public `consolas` system profile, generic
 adapters for Bavastro, Castells, Remotes, TodoRemates, and Prado, and a
 transactional run engine with durable leases and canonical snapshots.
-HTTP profile endpoints, a daemon scheduler, notification delivery, a complete
-UI, and Home Assistant packaging remain separate future tasks.
+HTTP profile endpoints, optional scheduler and notification delivery are
+available. The Home Assistant add-on packaging is documented in
+[docs/addon.md](docs/addon.md); it is an independent ingress application and
+does not depend on Consolas.
 
 ## Local development
 
@@ -36,6 +38,11 @@ docker compose up --build
 
 The application is available at <http://localhost:8789> and persists data in
 the named `auction-watch-data` volume mounted at `/data`.
+
+For Home Assistant, use the add-on metadata in `config.yaml`. It stores data
+under `/data/auction-watch`, runs migrations before startup, and keeps scans and
+SMTP disabled by default. See [docs/addon.md](docs/addon.md) for installation,
+backup, restoration, and troubleshooting.
 
 ## Project boundaries
 

@@ -52,9 +52,11 @@ layers remain unchanged.
 
 SQLite lives at `${AW_DATA_DIR}/auction-watch.sqlite3`. Alembic is the only
 schema authority, and packaged migrations are resolved independently of the
-checkout or current working directory. Docker and the future Home Assistant
-add-on use the same application core; the run engine itself does not contact
-Home Assistant, send email, start a daemon, or execute real scans in tests.
+checkout or current working directory. Docker and the Home Assistant add-on
+use the same application core; the run engine itself does not contact Home
+Assistant, send email, start a daemon, or execute real scans in tests. The
+add-on persists only under `/data/auction-watch` and enables its supervised
+worker inside the container bootstrap.
 
 ## Run engine boundary
 
@@ -76,12 +78,14 @@ and writes one logical SMTP outbox item per run/profile/channel when policy
 requires it. Delivery is retried with bounded backoff through a sender
 contract; the SMTP implementation is runtime-configured and the fake sender is
 used by tests. The worker is opt-in through `AW_WORKER_ENABLED` so validation
-and local startup cannot unexpectedly perform scans or send mail.
+and local startup cannot unexpectedly perform scans or send mail. The add-on
+bootstrap sets that flag only inside the supervised container and keeps its
+scheduler and SMTP options disabled by default.
 
 The versioned profile API and React web client expose this durable boundary:
 profile CRUD uses optimistic revisions, manual runs require an idempotency key,
 snapshots are read from persisted reconciled state, and opportunity decisions
 are written through the operational repository. A timeout or partial run is
 shown as degraded coverage by the client, never as an authoritative empty
-result. Daemon scheduling, email, and Home Assistant deployment remain outside
-this task.
+result. The Home Assistant wrapper provides supervised startup, ingress, and
+persistent-data migration without changing the core package defaults.

@@ -1,0 +1,50 @@
+name: Auction Watch
+version: "0.1.0"
+slug: auction-watch
+description: Monitor público de subastas con perfiles independientes
+startup: services
+boot: auto
+init: false
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+  - i386
+build_from:
+  amd64: ghcr.io/home-assistant/amd64-base-python:3.12
+  aarch64: ghcr.io/home-assistant/aarch64-base-python:3.12
+  armv7: ghcr.io/home-assistant/armv7-base-python:3.12
+  armhf: ghcr.io/home-assistant/armhf-base-python:3.12
+  i386: ghcr.io/home-assistant/i386-base-python:3.12
+map:
+  - data:rw
+ingress: true
+ingress_port: 8789
+panel_icon: mdi:gavel
+panel_title: Auction Watch
+watchdog: http://127.0.0.1:8789/api/v1/health
+options:
+  timezone: America/Montevideo
+  scheduler_enabled: false
+  worker_poll_seconds: 0.5
+  smtp_enabled: false
+  smtp_host: ""
+  smtp_port: 587
+  smtp_sender: auction-watch@localhost
+  smtp_recipient: ""
+  smtp_username: ""
+  smtp_password: ""
+  smtp_use_tls: true
+schema:
+  timezone: str
+  scheduler_enabled: bool
+  worker_poll_seconds: float
+  smtp_enabled: bool
+  smtp_host: str?
+  smtp_port: int
+  smtp_sender: str
+  smtp_recipient: str?
+  smtp_username: str?
+  smtp_password: password?
+  smtp_use_tls: bool

@@ -151,11 +151,26 @@ class NotificationDeliveryWorker:
 class AuctionWatchWorker:
     """Run both queues serially in one process, with a stoppable background loop."""
 
-    def __init__(self, run_worker: RunWorker, delivery_worker: NotificationDeliveryWorker) -> None:
+    def __init__(
+        self,
+        run_worker: RunWorker,
+        delivery_worker: NotificationDeliveryWorker,
+        *,
+        schedule_once: Callable[[], object] | None = None,
+    ) -> None:
         self.run_worker = run_worker
         self.delivery_worker = delivery_worker
+        self.schedule_once = schedule_once
 
     def run_once(self) -> RunOutcome | None:
+        if self.schedule_once is not None:
+            try:
+                self.schedule_once()
+            except Exception as exc:
+                logger.error(
+                    "auction_scheduler_failed",
+                    extra={"error": type(exc).__name__},
+                )
         result = self.run_worker.run_once()
         self.delivery_worker.run_once()
         return result

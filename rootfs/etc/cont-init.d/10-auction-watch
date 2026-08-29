@@ -1,0 +1,4 @@
+#!/usr/bin/with-contenv bash
+set -euo pipefail
+
+exec python -m auction_watch.addon_runtime migrate
