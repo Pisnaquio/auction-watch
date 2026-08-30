@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Normaliza el prefijo reenviado por Home Assistant Ingress para servir UI y API.
+
 ## 0.1.1
 
 - Corrige el arranque bajo s6-overlay y la operación completa mediante Home Assistant Ingress.

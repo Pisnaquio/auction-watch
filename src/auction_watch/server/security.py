@@ -60,6 +60,14 @@ class IngressSecurityMiddleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
+        ingress_path = (_header(scope, b"x-ingress-path") or "").rstrip("/")
+        request_path = str(scope.get("path", ""))
+        if ingress_path and request_path.startswith(f"{ingress_path}/"):
+            scope = dict(scope)
+            stripped_path = request_path[len(ingress_path) :] or "/"
+            scope["path"] = stripped_path
+            scope["raw_path"] = stripped_path.encode("utf-8")
+            scope["root_path"] = ingress_path
         host = _header(scope, b"host")
         if not _host_is_sane(host):
             await self._reject(send)
