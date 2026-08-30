@@ -24,7 +24,7 @@ ingress_panel: true
 panel_icon: mdi:gavel
 panel_title: Auction Watch
 panel_admin: false
-watchdog: http://127.0.0.1:8789/api/v1/health
+watchdog: "http://[HOST]:[PORT:8789]/api/v1/health"
 options:
   timezone: America/Montevideo
   scheduler_enabled: false
