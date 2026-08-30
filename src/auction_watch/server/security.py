@@ -68,6 +68,14 @@ class IngressSecurityMiddleware:
             scope["path"] = stripped_path
             scope["raw_path"] = stripped_path.encode("utf-8")
             scope["root_path"] = ingress_path
+        elif request_path.startswith("/api/hassio_ingress/"):
+            parts = request_path.split("/", 4)
+            if len(parts) >= 4:
+                scope = dict(scope)
+                stripped_path = f"/{parts[4]}" if len(parts) == 5 and parts[4] else "/"
+                scope["path"] = stripped_path
+                scope["raw_path"] = stripped_path.encode("utf-8")
+                scope["root_path"] = "/".join(parts[:4])
         host = _header(scope, b"host")
         if not _host_is_sane(host):
             await self._reject(send)

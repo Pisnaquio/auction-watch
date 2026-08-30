@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Soporta el prefijo de Ingress reenviado sin cabecera auxiliar por Supervisor.
+
 ## 0.1.2
 
 - Normaliza el prefijo reenviado por Home Assistant Ingress para servir UI y API.
