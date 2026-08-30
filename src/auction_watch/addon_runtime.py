@@ -34,7 +34,7 @@ def apply_environment(
     target = environment if environment is not None else os.environ
     values = {
         "AW_DATA_DIR": str(ADDON_DATA_DIR),
-        "AW_HOST": "127.0.0.1",
+        "AW_HOST": "0.0.0.0",
         "AW_PORT": "8789",
         "AW_WORKER_ENABLED": "true",
         "AW_TIMEZONE": options.timezone,
@@ -93,7 +93,7 @@ def main() -> None:
         return
     os.execvp(
         "uvicorn",
-        ["uvicorn", "auction_watch.main:app", "--host", "127.0.0.1", "--port", "8789"],
+        ["uvicorn", "auction_watch.main:app", "--host", "0.0.0.0", "--port", "8789"],
     )
 
 

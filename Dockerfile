@@ -12,7 +12,7 @@ FROM ${BUILD_FROM} AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     AW_DATA_DIR=/data/auction-watch \
-    AW_HOST=127.0.0.1 \
+    AW_HOST=0.0.0.0 \
     AW_PORT=8789 \
     AW_WEB_DIST=/opt/auction-watch/web/dist \
     AW_WORKER_ENABLED=true \
