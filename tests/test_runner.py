@@ -208,6 +208,96 @@ def test_failed_run_does_not_replace_last_snapshot(tmp_path: Path) -> None:
         database.dispose()
 
 
+def test_duplicate_source_identities_fail_closed_before_reconciliation(tmp_path: Path) -> None:
+    state = SourceState(complete_result(lot(), lot()))
+    database, runner = engine(tmp_path, state, profile())
+    try:
+        result = runner.run("profile-a", request_id="duplicate-source-data")
+        assert result.status == "failed"
+        assert result.snapshot_id is None
+        assert result.errors == ("source contract violation (duplicate lot identity)",)
+        repository = OperationalRepository(database)
+        assert repository.active_lots(("fake",)) == []
+        assert repository.get_run("duplicate-source-data").error == result.errors[0]
+    finally:
+        database.dispose()
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_error"),
+    (
+        (
+            complete_result(lot()).model_copy(update={"groups": (group(), group())}),
+            "source contract violation (duplicate group identity)",
+        ),
+        (
+            complete_result(lot()).model_copy(
+                update={
+                    "receipts": (
+                        complete_result(lot()).receipts[0],
+                        complete_result(lot()).receipts[0],
+                    )
+                }
+            ),
+            "source contract violation (duplicate group receipt)",
+        ),
+    ),
+)
+def test_duplicate_group_contracts_fail_closed(
+    tmp_path: Path, result: SourceScanResult, expected_error: str
+) -> None:
+    state = SourceState(result)
+    database, runner = engine(tmp_path, state, profile())
+    try:
+        outcome = runner.run("profile-a", request_id="duplicate-group-contract")
+        assert outcome.status == "failed"
+        assert outcome.errors == (expected_error,)
+        assert OperationalRepository(database).active_lots(("fake",)) == []
+    finally:
+        database.dispose()
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_error"),
+    (
+        (
+            complete_result(lot()).model_copy(update={"receipts": ()}),
+            "source contract violation (groups and coverage receipts do not match)",
+        ),
+        (
+            complete_result(lot()).model_copy(
+                update={"lots": (lot().model_copy(update={"auction_id": "other-group"}),)}
+            ),
+            "source contract violation (lot belongs to an undiscovered group)",
+        ),
+        (
+            complete_result(lot()).model_copy(
+                update={
+                    "receipts": (
+                        complete_result(lot()).receipts[0].model_copy(
+                            update={"lot_count": 0}
+                        ),
+                    )
+                }
+            ),
+            "source contract violation (coverage receipt lot count does not match inventory)",
+        ),
+    ),
+)
+def test_incoherent_source_coverage_fails_before_reconciliation(
+    tmp_path: Path, result: SourceScanResult, expected_error: str
+) -> None:
+    state = SourceState(result)
+    database, runner = engine(tmp_path, state, profile())
+    try:
+        outcome = runner.run("profile-a", request_id="incoherent-source-contract")
+        assert outcome.status == "failed"
+        assert outcome.errors == (expected_error,)
+        assert OperationalRepository(database).active_lots(("fake",)) == []
+    finally:
+        database.dispose()
+
+
 def test_user_state_is_preserved_and_manual_success_covers_next_schedule_slot(
     tmp_path: Path,
 ) -> None:

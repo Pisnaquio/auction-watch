@@ -61,6 +61,36 @@ def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
     return tuple(records)
 
 
+def _canonical_auctions(
+    records: tuple[Mapping[str, Any], ...],
+) -> tuple[tuple[Mapping[str, Any], ...], tuple[str, ...], frozenset[str]]:
+    """Collapse repeated GXState render records before scheduling network work."""
+
+    ordered = sorted(
+        records,
+        key=lambda raw: (
+            clean_text(raw.get("RemateId")),
+            json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str),
+        ),
+    )
+    unique: dict[str, Mapping[str, Any]] = {}
+    errors: list[str] = []
+    conflicted: set[str] = set()
+    for raw in ordered:
+        group_id = clean_text(raw.get("RemateId"))
+        if not group_id:
+            errors.append("Castells discovery item lacks RemateId")
+            continue
+        previous = unique.get(group_id)
+        if previous is None:
+            unique[group_id] = raw
+            continue
+        if previous != raw:
+            errors.append(f"Castells group {group_id}: conflicting discovery records")
+            conflicted.add(group_id)
+    return tuple(unique.values()), tuple(errors), frozenset(conflicted)
+
+
 class CastellsSource(BaseAuctionSource):
     source_id = "castells"
     label = "Castells"
@@ -171,7 +201,8 @@ class CastellsSource(BaseAuctionSource):
             )
             if not pagination_complete:
                 raise ValueError("lots pagination reached the hard limit")
-            group_lots: list[AuctionLot] = []
+            group_lots: dict[str, AuctionLot] = {}
+            conflicted_lot_ids: set[str] = set()
             group_errors: list[str] = []
             for item in raw_lots:
                 try:
@@ -188,42 +219,51 @@ class CastellsSource(BaseAuctionSource):
                     if price is not None and currency is None:
                         group_errors.append(f"Castells group {group_id}: unknown currency")
                         price = None
-                    group_lots.append(
-                        AuctionLot(
-                            source_id=self.source_id,
-                            auction_id=group_id,
-                            lot_id=lot_id,
-                            title=title,
-                            description=title,
-                            category=group.category,
-                            price_value=price,
-                            price_currency=currency if price is not None else None,
-                            price_label=price_label,
-                            closing_at=utc_datetime(item.get("LoteCierre")) or group.closing_at,
-                            lot_url=urljoin(WEB_BASE, raw_lot_url),
-                            auction_url=group.url,
-                            image_url=first_image(
-                                item.get("Imagen") or item.get("image"), base=WEB_BASE
-                            ),
-                            active=clean_text(item.get("Estado") or "active").lower()
-                            not in {"cerrado", "closed"},
-                            observed_at=started,
-                        )
+                    candidate = AuctionLot(
+                        source_id=self.source_id,
+                        auction_id=group_id,
+                        lot_id=lot_id,
+                        title=title,
+                        description=title,
+                        category=group.category,
+                        price_value=price,
+                        price_currency=currency if price is not None else None,
+                        price_label=price_label,
+                        closing_at=utc_datetime(item.get("LoteCierre")) or group.closing_at,
+                        lot_url=urljoin(WEB_BASE, raw_lot_url),
+                        auction_url=group.url,
+                        image_url=first_image(
+                            item.get("Imagen") or item.get("image"), base=WEB_BASE
+                        ),
+                        active=clean_text(item.get("Estado") or "active").lower()
+                        not in {"cerrado", "closed"},
+                        observed_at=started,
                     )
+                    if lot_id in conflicted_lot_ids:
+                        continue
+                    previous = group_lots.get(lot_id)
+                    if previous is None:
+                        group_lots[lot_id] = candidate
+                    elif previous != candidate:
+                        group_lots.pop(lot_id)
+                        conflicted_lot_ids.add(lot_id)
+                        group_errors.append(
+                            f"Castells group {group_id}: conflicting duplicate lot"
+                        )
                 except (TypeError, ValueError):
                     group_errors.append(f"Castells group {group_id}: malformed lot")
-            group_lots.sort(key=lambda lot: lot.lot_id)
+            ordered_lots = tuple(group_lots[key] for key in sorted(group_lots))
             status = "partial" if group_errors else "complete"
             receipt = GroupReceipt(
                 group_id=group_id,
                 status=status,
                 inventory_authoritative=status == "complete",
-                lot_count=len(group_lots),
+                lot_count=len(ordered_lots),
                 error_count=len(group_errors),
                 started_at=started,
                 finished_at=datetime.now(UTC),
             )
-            return group, tuple(group_lots), receipt, tuple(group_errors)
+            return group, ordered_lots, receipt, tuple(group_errors)
         except Exception as exc:
             error = f"Castells group {group_id or 'unknown'}: {_error_label(exc)}"
             receipt = GroupReceipt(
@@ -245,11 +285,8 @@ class CastellsSource(BaseAuctionSource):
             document = self._get(self.discovery_url)
             if not isinstance(document, str):
                 raise ValueError("Castells discovery must be HTML text")
-            auctions = tuple(
-                sorted(
-                    parse_gxstate(document),
-                    key=lambda raw: clean_text(raw.get("RemateId")),
-                )
+            auctions, discovery_errors, conflicted_groups = _canonical_auctions(
+                parse_gxstate(document)
             )
         except Exception as exc:
             return SourceScanResult(
@@ -262,10 +299,18 @@ class CastellsSource(BaseAuctionSource):
         groups: list[AuctionGroup] = []
         lots: list[AuctionLot] = []
         receipts: list[GroupReceipt] = []
-        errors: list[str] = []
+        errors: list[str] = list(discovery_errors)
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             results = executor.map(self._scan_group, auctions)
             for group, group_lots, receipt, group_errors in results:
+                if receipt.group_id in conflicted_groups:
+                    receipt = receipt.model_copy(
+                        update={
+                            "status": "failed" if receipt.status == "failed" else "partial",
+                            "inventory_authoritative": False,
+                            "error_count": receipt.error_count + 1,
+                        }
+                    )
                 if group is not None:
                     groups.append(group)
                     lots.extend(group_lots)

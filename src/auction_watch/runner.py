@@ -220,14 +220,24 @@ class AuctionRunEngine:
                     extra={"run_id": run.run_id, "source_id": spec.source_id},
                 )
                 try:
-                    results[spec.source_id] = source.scan()
+                    scanned = source.scan()
                 except Exception as exc:
-                    results[spec.source_id] = SourceScanResult(
+                    scanned = SourceScanResult(
                         source_id=spec.source_id,
                         label=spec.label,
                         discovery_status="failed",
                         errors=(f"source scan failed ({type(exc).__name__})",),
                     )
+                contract_error = self._source_contract_error(spec.source_id, scanned)
+                if contract_error is not None:
+                    scanned = SourceScanResult(
+                        source_id=spec.source_id,
+                        label=spec.label,
+                        discovery_status="failed",
+                        inventory_authoritative=False,
+                        errors=(f"source contract violation ({contract_error})",),
+                    )
+                results[spec.source_id] = scanned
                 self._persist_source(
                     run.run_id, spec.source_id, spec.label, results[spec.source_id]
                 )
@@ -343,6 +353,61 @@ class AuctionRunEngine:
                 lots_by_group.get(receipt.group_id, []),
             )
         self.operational.reconcile_omitted_groups(run_id, source_id)
+
+    @staticmethod
+    def _source_contract_error(
+        expected_source_id: str, result: SourceScanResult
+    ) -> str | None:
+        if result.source_id != expected_source_id:
+            return "unexpected source identity"
+        group_ids = [group.auction_id for group in result.groups]
+        if len(group_ids) != len(set(group_ids)):
+            return "duplicate group identity"
+        receipt_ids = [receipt.group_id for receipt in result.receipts]
+        if len(receipt_ids) != len(set(receipt_ids)):
+            return "duplicate group receipt"
+        identities = [
+            (lot.source_id, lot.auction_id, lot.lot_id) for lot in result.lots
+        ]
+        if len(identities) != len(set(identities)):
+            return "duplicate lot identity"
+        if any(group.source_id != expected_source_id for group in result.groups):
+            return "group belongs to another source"
+        if any(lot.source_id != expected_source_id for lot in result.lots):
+            return "lot belongs to another source"
+        group_id_set = set(group_ids)
+        covered_group_ids = {
+            receipt.group_id for receipt in result.receipts if receipt.status != "failed"
+        }
+        if group_id_set != covered_group_ids:
+            return "groups and coverage receipts do not match"
+        if any(lot.auction_id not in group_id_set for lot in result.lots):
+            return "lot belongs to an undiscovered group"
+        lot_counts: dict[str, int] = {group_id: 0 for group_id in group_ids}
+        for lot in result.lots:
+            lot_counts[lot.auction_id] += 1
+        if any(
+            receipt.status != "failed"
+            and receipt.lot_count != lot_counts.get(receipt.group_id, 0)
+            for receipt in result.receipts
+        ):
+            return "coverage receipt lot count does not match inventory"
+        if any(
+            receipt.inventory_authoritative and receipt.status != "complete"
+            for receipt in result.receipts
+        ):
+            return "non-complete receipt claims authority"
+        if result.inventory_authoritative and (
+            result.discovery_status != "complete"
+            or bool(result.errors)
+            or any(
+                not receipt.inventory_authoritative
+                for receipt in result.receipts
+                if receipt.status != "failed"
+            )
+        ):
+            return "source authority conflicts with coverage"
+        return None
 
     @staticmethod
     def _group_record(group: AuctionGroup) -> GroupRecord:

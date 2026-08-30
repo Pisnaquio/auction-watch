@@ -143,6 +143,94 @@ def test_castells_requires_html_gxstate_and_reads_lots_endpoint() -> None:
     assert str(result.lots[0].price_value) == "1234.50"
 
 
+def test_castells_deduplicates_repeated_discovery_and_identical_lots() -> None:
+    record = (
+        '{"RemateImagen":"/img.jpg","RemateId":77,'
+        '"RemateNombre":"Remate repetido","RemateTipo":1}'
+    )
+    document = f"<html><script>GXState={record}{record};</script></html>"
+    lot = {
+        "LoteId": "77:16",
+        "LoteDescripcion": "Consola Castells",
+        "DetalleUrl": "frontend.sitio.visualremate.aspx?Remate=77&Lote=16",
+        "ValorActual": "1.234,50",
+        "LotePrecioSalidaMonedaWF": "UYU",
+    }
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=document)
+        if url.startswith(LOTS_URL):
+            return FakeResponse(payload={"data": [lot, dict(lot)]})
+        raise AssertionError(url)
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport).scan()
+
+    assert result.discovery_status == "complete"
+    assert [group.auction_id for group in result.groups] == ["77"]
+    assert [receipt.group_id for receipt in result.receipts] == ["77"]
+    assert [lot.lot_id for lot in result.lots] == ["77:16"]
+    assert result.receipts[0].lot_count == 1
+    assert len([url for url, _timeout in transport.calls if url.startswith(LOTS_URL)]) == 1
+
+
+@pytest.mark.parametrize("reverse", (False, True))
+def test_castells_conflicting_duplicate_lot_is_partial_and_fail_closed(
+    reverse: bool,
+) -> None:
+    base = load_json("castells_lots.json")["data"][0]
+    conflict = {**base, "LoteDescripcion": "Otro contenido con el mismo ID"}
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        if url.startswith(LOTS_URL):
+            rows = [conflict, base] if reverse else [base, conflict]
+            return FakeResponse(payload={"data": rows})
+        raise AssertionError(url)
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.inventory_authoritative is False
+    assert result.lots == ()
+    assert result.receipts[0].status == "partial"
+    assert result.receipts[0].inventory_authoritative is False
+    assert result.receipts[0].error_count == 1
+    assert result.receipts[0].lot_count == len(result.lots)
+
+
+def test_castells_conflicting_discovery_is_non_authoritative_for_that_group() -> None:
+    first = (
+        '{"RemateImagen":"/a.jpg","RemateId":77,'
+        '"RemateNombre":"Remate A","RemateTipo":1}'
+    )
+    second = (
+        '{"RemateImagen":"/b.jpg","RemateId":77,'
+        '"RemateNombre":"Remate B","RemateTipo":2}'
+    )
+    document = f"<html><script>GXState={first}{second};</script></html>"
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=document)
+        if url.startswith(LOTS_URL):
+            return FakeResponse(payload={"data": []})
+        raise AssertionError(url)
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.inventory_authoritative is False
+    assert len(result.groups) == len(result.receipts) == 1
+    assert result.receipts[0].status == "partial"
+    assert result.receipts[0].inventory_authoritative is False
+    assert result.receipts[0].error_count == 1
+    assert len([url for url, _timeout in transport.calls if url.startswith(LOTS_URL)]) == 1
+
+
 def test_castells_json_is_rejected_instead_of_coerced() -> None:
     result = CastellsSource(
         FakeTransport(lambda _url: FakeResponse(payload={"results": []}))

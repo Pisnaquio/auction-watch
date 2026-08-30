@@ -85,7 +85,7 @@ def test_addon_artifact_inputs_are_explicitly_whitelisted() -> None:
     manifest = (ROOT / "config.yaml").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "ingress: true" in manifest
-    assert "map:\n  - data:rw" in manifest
+    assert "map:\n  - type: data\n    read_only: false" in manifest
     assert "smtp_enabled: false" in manifest
     assert "scheduler_enabled: false" in manifest
     assert "AW_WORKER_ENABLED=true" in dockerfile

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+- Deduplica remates y lotes repetidos de Castells antes de reconciliar el inventario.
+- Marca como parcial y no autoritativa cualquier identidad duplicada con datos conflictivos.
+- Rechaza resultados estructuralmente inválidos de una fuente sin derribar las demás.
+
 ## 0.1.5
 
 - Conserva `Content-Type: application/json` al enviar la clave de idempotencia y evita estados visuales contradictorios ante rechazos.

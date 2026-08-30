@@ -10,13 +10,17 @@ client = TestClient(app)
 
 
 def test_package_is_importable() -> None:
-    assert __version__ == "0.1.0"
+    assert __version__
 
 
 def test_health() -> None:
     response = client.get("/api/v1/health")
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "service": "auction-watch", "version": "0.1.0"}
+    assert response.json() == {
+        "ok": True,
+        "service": "auction-watch",
+        "version": __version__,
+    }
 
 
 def test_readiness_with_usable_directory(tmp_path: Path, monkeypatch) -> None:
