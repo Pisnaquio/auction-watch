@@ -62,6 +62,12 @@ class IngressSecurityMiddleware:
             return
         ingress_path = (_header(scope, b"x-ingress-path") or "").rstrip("/")
         request_path = str(scope.get("path", ""))
+        while request_path.startswith("//"):
+            request_path = request_path[1:]
+        if request_path != scope.get("path"):
+            scope = dict(scope)
+            scope["path"] = request_path
+            scope["raw_path"] = request_path.encode("utf-8")
         if ingress_path and request_path.startswith(f"{ingress_path}/"):
             scope = dict(scope)
             stripped_path = request_path[len(ingress_path) :] or "/"

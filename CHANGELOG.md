@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+- Normaliza la doble barra que Supervisor antepone a rutas Ingress.
+
 ## 0.1.3
 
 - Soporta el prefijo de Ingress reenviado sin cabecera auxiliar por Supervisor.
