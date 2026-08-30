@@ -11,6 +11,7 @@ files=(
   Dockerfile
   README.md
   SECURITY.md
+  build.yaml
   config.yaml
   docs/addon.md
   pyproject.toml
