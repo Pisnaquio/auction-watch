@@ -1,6 +1,6 @@
 name: Auction Watch
 version: "0.1.0"
-slug: auction_watch_independent
+slug: auctionwatch
 description: Monitor público de subastas con perfiles independientes
 startup: services
 boot: auto
