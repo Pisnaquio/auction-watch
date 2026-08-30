@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+- Exige contexto de videojuegos para términos ambiguos del perfil Consolas como
+  `mario`, `family`, `ds` y `switch`.
+- Migra automáticamente el perfil protegido a la segunda versión del seed.
+
 ## 0.1.6
 
 - Deduplica remates y lotes repetidos de Castells antes de reconciliar el inventario.

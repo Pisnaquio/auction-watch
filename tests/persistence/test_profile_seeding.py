@@ -9,7 +9,7 @@ from auction_watch.persistence import (
     SystemProfileImmutableError,
     upgrade_head,
 )
-from auction_watch.profiles.seed import consoles_profile
+from auction_watch.profiles.seed import CONSOLAS_SEED_VERSION, consoles_profile
 
 
 @pytest.fixture
@@ -33,12 +33,36 @@ def test_consolas_seed_is_idempotent_and_preserves_pause(repository: ProfileRepo
     paused = first.profile.model_copy(update={"enabled": False})
     paused_result = repository.replace(paused, expected_revision=1)
     upgraded = consoles_profile().model_copy(
-        update={"seed_version": 2, "keywords_any": ("consola", "hardware")}
+        update={
+            "seed_version": CONSOLAS_SEED_VERSION + 1,
+            "keywords_any": ("consola", "hardware"),
+        }
     )
     result = repository.seed_system_profile(upgraded)
     assert result.revision == paused_result.revision + 1
     assert result.profile.enabled is False
-    assert result.profile.seed_version == 2
+    assert result.profile.seed_version == CONSOLAS_SEED_VERSION + 1
+
+
+def test_consolas_seed_upgrades_v1_to_context_hardened_v2(
+    repository: ProfileRepository,
+) -> None:
+    current = consoles_profile()
+    legacy = current.model_copy(
+        update={
+            "seed_version": 1,
+            "context_rules": tuple(
+                rule for rule in current.context_rules if rule.term not in {"mario", "family", "ds"}
+            ),
+        }
+    )
+    first = repository.seed_system_profile(legacy)
+    upgraded = repository.seed_system_profile(current)
+
+    assert first.profile.seed_version == 1
+    assert upgraded.revision == first.revision + 1
+    assert upgraded.profile.seed_version == CONSOLAS_SEED_VERSION
+    assert {rule.term for rule in upgraded.profile.context_rules} >= {"mario", "family", "ds"}
 
 
 def test_system_profile_cannot_be_deleted_or_change_identity(repository: ProfileRepository) -> None:

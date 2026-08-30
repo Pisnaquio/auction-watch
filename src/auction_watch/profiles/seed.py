@@ -5,7 +5,7 @@ from __future__ import annotations
 from auction_watch.core.models import ContextRule, SearchProfile
 
 CONSOLAS_SEED_KEY = "auction-watch-consolas"
-CONSOLAS_SEED_VERSION = 1
+CONSOLAS_SEED_VERSION = 2
 
 
 def consoles_profile() -> SearchProfile:
@@ -171,6 +171,7 @@ def consoles_profile() -> SearchProfile:
                     "sega",
                     "atari",
                 ),
+                excluded_any=("piezas mecanicas", "piezas electricas"),
             ),
             ContextRule(
                 term="controles",
@@ -184,6 +185,7 @@ def consoles_profile() -> SearchProfile:
                     "sega",
                     "atari",
                 ),
+                excluded_any=("piezas mecanicas", "piezas electricas"),
             ),
             ContextRule(
                 term="switch",
@@ -197,6 +199,55 @@ def consoles_profile() -> SearchProfile:
                     "poe",
                     "rj45",
                     "switch hdmi",
+                ),
+            ),
+            ContextRule(
+                term="mario",
+                required_any=(
+                    "super mario",
+                    "mario bros",
+                    "mario kart",
+                    "nintendo",
+                    "consola",
+                    "videojuego",
+                    "juego",
+                    "juegos",
+                    "cartucho",
+                    "game boy",
+                    "switch",
+                    "wii",
+                    "nes",
+                    "snes",
+                    "famicom",
+                ),
+            ),
+            ContextRule(
+                term="family",
+                required_any=(
+                    "family computer",
+                    "family game",
+                    "famicom",
+                    "famiclone",
+                    "consola",
+                    "videojuego",
+                    "juego",
+                    "juegos",
+                    "cartucho",
+                    "nintendo",
+                ),
+            ),
+            ContextRule(
+                term="ds",
+                required_any=(
+                    "nintendo ds",
+                    "ds lite",
+                    "dsi",
+                    "consola",
+                    "videojuego",
+                    "juego",
+                    "juegos",
+                    "cartucho",
+                    "nintendo",
                 ),
             ),
             ContextRule(term="pong", excluded_any=("ping pong",)),
