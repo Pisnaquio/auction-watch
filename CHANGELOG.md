@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Conserva `Content-Type: application/json` al enviar la clave de idempotencia y evita estados visuales contradictorios ante rechazos.
+
 ## 0.1.4
 
 - Normaliza la doble barra que Supervisor antepone a rutas Ingress.
