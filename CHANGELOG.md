@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.1.0 — proposed
+## 0.1.1
+
+- Corrige el arranque bajo s6-overlay y la operación completa mediante Home Assistant Ingress.
+
+## 0.1.0
 
 - First independent Home Assistant add-on packaging for Auction Watch.
 - Ingress-only web/API service with idempotent migrations under
