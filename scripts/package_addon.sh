@@ -14,6 +14,7 @@ files=(
   config.yaml
   docs/addon.md
   pyproject.toml
+  repository.yaml
   rootfs
   scripts/audit_addon_artifact.py
   scripts/validate_addon_options.py
