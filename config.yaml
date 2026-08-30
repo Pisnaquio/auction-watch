@@ -21,6 +21,8 @@ map:
   - data:rw
 ingress: true
 ingress_port: 8789
+ingress_entry: /
+ingress_panel: true
 panel_icon: mdi:gavel
 panel_title: Auction Watch
 watchdog: http://127.0.0.1:8789/api/v1/health
