@@ -279,6 +279,7 @@ def test_castells_request_budget_fails_pending_groups_closed() -> None:
 
     transport = FakeTransport(handler)
     result = CastellsSource(transport, max_requests=2).scan()
+    assert len(result.groups) == len(result.receipts) == 3
     assert len(result.receipts) == 3
     assert sum(receipt.status == "failed" for receipt in result.receipts) >= 1
     assert result.inventory_authoritative is False
@@ -325,7 +326,7 @@ def test_castells_deadline_preserves_finished_groups_and_fails_pending_in_order(
         deadline_seconds=1.0,
         clock=clock,
     ).scan()
-    assert len(result.groups) == 2
+    assert len(result.groups) == 3
     assert [group.auction_id for group in result.groups] == sorted(
         group.auction_id for group in result.groups
     )

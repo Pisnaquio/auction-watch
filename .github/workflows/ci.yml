@@ -4,11 +4,16 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: python scripts/check_public_safety.py
+      - run: ./scripts/package_addon.sh /tmp/auction-watch-addon.tar.gz
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -17,7 +22,6 @@ jobs:
       - run: ruff check .
       - run: mypy
       - run: pytest
-      - run: python scripts/check_public_safety.py
 
   frontend:
     runs-on: ubuntu-latest

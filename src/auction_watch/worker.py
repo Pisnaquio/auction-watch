@@ -122,7 +122,6 @@ class NotificationDeliveryWorker:
             payload = item.payload
             self.sender.send(
                 NotificationMessage(
-                    recipient=str(payload.get("recipient", "")),
                     subject=str(payload.get("subject", "Auction Watch")),
                     body=str(payload.get("body", "Auction Watch notification")),
                 )

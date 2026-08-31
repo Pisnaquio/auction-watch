@@ -84,13 +84,17 @@ def create_app(
                         runtime_settings.smtp_recipient if runtime_settings.smtp_enabled else None
                     ),
                     username=runtime_settings.smtp_username,
-                    password=runtime_settings.smtp_password,
+                    password=(
+                        runtime_settings.smtp_password.get_secret_value()
+                        if runtime_settings.smtp_password
+                        else None
+                    ),
                     use_tls=runtime_settings.smtp_use_tls,
                 )
                 planner = NotificationPlanner(
                     notifications,
-                    recipient=(
-                        runtime_settings.smtp_recipient if runtime_settings.smtp_enabled else None
+                    enabled=bool(
+                        runtime_settings.smtp_enabled and runtime_settings.smtp_recipient
                     ),
                 )
                 schedule_once = None
@@ -115,6 +119,9 @@ def create_app(
                 )
                 application.state.run_queue = queue
                 application.state.notifications = notifications
+                application.state.notification_configured = bool(
+                    runtime_settings.smtp_enabled and runtime_settings.smtp_recipient
+                )
                 application.state.worker = worker
                 if runtime_settings.worker_enabled:
                     worker_thread = Thread(
@@ -138,6 +145,7 @@ def create_app(
             application.state.run_engine = None
             application.state.run_queue = None
             application.state.notifications = None
+            application.state.notification_configured = False
             application.state.worker = None
 
     application = FastAPI(title="Auction Watch", version=__version__, lifespan=lifespan)

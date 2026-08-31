@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class AddonOptions(BaseModel):
     """The public, non-sensitive shape of ``/data/options.json``."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     timezone: str = "UTC"
     scheduler_enabled: bool = False
@@ -25,7 +25,7 @@ class AddonOptions(BaseModel):
     smtp_sender: str = "auction-watch@localhost"
     smtp_recipient: str | None = None
     smtp_username: str | None = None
-    smtp_password: str | None = None
+    smtp_password: SecretStr | None = None
     smtp_use_tls: bool = True
 
     @field_validator(
@@ -48,4 +48,12 @@ class AddonOptions(BaseModel):
     def validate_smtp(self) -> AddonOptions:
         if self.smtp_enabled and (not self.smtp_host or not self.smtp_recipient):
             raise ValueError("smtp_host and smtp_recipient are required when SMTP is enabled")
+        has_username = bool(self.smtp_username)
+        has_password = bool(self.smtp_password and self.smtp_password.get_secret_value())
+        if self.smtp_enabled and not self.smtp_use_tls:
+            raise ValueError("SMTP delivery requires TLS")
+        if has_username != has_password:
+            raise ValueError("smtp_username and smtp_password must be provided together")
+        if (has_username or has_password) and not self.smtp_use_tls:
+            raise ValueError("SMTP credentials require TLS")
         return self

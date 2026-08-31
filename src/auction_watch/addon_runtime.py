@@ -22,8 +22,8 @@ def load_options(path: Path = OPTIONS_PATH) -> AddonOptions:
     try:
         payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
         return AddonOptions.model_validate(payload)
-    except (OSError, ValueError, TypeError) as exc:
-        raise RuntimeError("invalid add-on configuration") from exc
+    except (OSError, ValueError, TypeError):
+        raise RuntimeError("invalid add-on configuration") from None
 
 
 def apply_environment(
@@ -50,7 +50,9 @@ def apply_environment(
             "AW_SMTP_HOST": options.smtp_host,
             "AW_SMTP_RECIPIENT": options.smtp_recipient,
             "AW_SMTP_USERNAME": options.smtp_username,
-            "AW_SMTP_PASSWORD": options.smtp_password,
+            "AW_SMTP_PASSWORD": (
+                options.smtp_password.get_secret_value() if options.smtp_password else None
+            ),
         }
         if options.smtp_enabled
         else {}

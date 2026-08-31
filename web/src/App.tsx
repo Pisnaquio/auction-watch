@@ -23,7 +23,19 @@ const split = (value: string) => value.split(",").map((part) => part.trim()).fil
 const join = (value: string[]) => value.join(", ");
 const copy = (value: Profile) => JSON.parse(JSON.stringify(value)) as Profile;
 function emptyProfile(): Profile { return { id: "", name: "", kind: "user", locked: false, enabled: true, keywords_any: [], keywords_all: [], exact_phrases: [], exclude_keywords: [], categories: [], boost_keywords: {}, risk_keywords: {}, context_rules: [], source_ids: [...sourceIds], minimum_score: 0, price_filter: null, notification_mode: "disabled", schedule: { enabled: false, times: [], timezone: "America/Montevideo" } }; }
-async function api<T>(path: string, init?: RequestInit): Promise<T> { const response = await fetch(path.replace(/^\//, ""), { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) } }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : `Error ${response.status}`); return body as T; }
+function requestError(path: string, status: number, detail: unknown): Error {
+  if (typeof detail === "string") return new Error(`${path}: ${detail}`);
+  if (Array.isArray(detail)) {
+    const first = detail.find((item): item is { loc?: unknown; msg?: unknown } => Boolean(item && typeof item === "object"));
+    if (first) {
+      const field = Array.isArray(first.loc) ? first.loc.filter((part) => part !== "body").join(".") : "";
+      const message = typeof first.msg === "string" ? first.msg : "solicitud inválida";
+      return new Error(`${path}: ${field ? `${field}: ` : ""}${message}`);
+    }
+  }
+  return new Error(`${path}: Error ${status}`);
+}
+async function api<T>(path: string, init?: RequestInit): Promise<T> { const response = await fetch(path.replace(/^\//, ""), { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) } }); const body = await response.json().catch(() => ({})); if (!response.ok) throw requestError(path, response.status, body.detail); return body as T; }
 
 function Editor({ profile, selected, creating, busy, onChange, onSubmit }: { profile: Profile; selected: ProfileView | null; creating: boolean; busy: boolean; onChange: <K extends keyof Profile>(key: K, value: Profile[K]) => void; onSubmit: (profile: Profile) => void }) {
   const [boosts, setBoosts] = useState(JSON.stringify(profile.boost_keywords, null, 2));

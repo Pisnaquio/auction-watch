@@ -174,6 +174,37 @@ def test_partial_source_preserves_previous_inventory_and_degrades_run(tmp_path: 
         database.dispose()
 
 
+def test_failed_group_receipt_is_coverage_and_does_not_fail_other_results(tmp_path: Path) -> None:
+    state = SourceState(complete_result(lot()))
+    database, runner = engine(tmp_path, state, profile())
+    try:
+        assert runner.run("profile-a", request_id="before-group-failure").status == "completed"
+        failed_receipt = GroupReceipt(
+            group_id="auction:1",
+            status="failed",
+            inventory_authoritative=False,
+            lot_count=0,
+            error_count=1,
+            started_at=NOW,
+            finished_at=NOW,
+        )
+        state.result = SourceScanResult(
+            source_id="fake",
+            label="Fake",
+            groups=(group(),),
+            discovery_status="partial",
+            inventory_authoritative=False,
+            receipts=(failed_receipt,),
+            errors=("group request timed out",),
+        )
+        result = runner.run("profile-a", request_id="one-group-failure")
+        assert result.status == "partial"
+        assert result.snapshot_id is not None
+        assert OperationalRepository(database).lifecycles(("fake",))[0].active is True
+    finally:
+        database.dispose()
+
+
 def test_complete_empty_discovery_closes_omitted_group_but_partial_does_not(tmp_path: Path) -> None:
     state = SourceState(complete_result(lot()))
     database, runner = engine(tmp_path, state, profile())

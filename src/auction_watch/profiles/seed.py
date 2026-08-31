@@ -5,7 +5,7 @@ from __future__ import annotations
 from auction_watch.core.models import ContextRule, SearchProfile
 
 CONSOLAS_SEED_KEY = "auction-watch-consolas"
-CONSOLAS_SEED_VERSION = 2
+CONSOLAS_SEED_VERSION = 3
 
 
 def consoles_profile() -> SearchProfile:

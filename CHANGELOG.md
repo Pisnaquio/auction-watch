@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.8
+
+- Una cobertura fallida de Castells ya no invalida la corrida completa: conserva
+  el inventario previo del remate afectado y publica el resto como parcial.
+- El perfil protegido Consolas se actualiza a criterios de consola correctos,
+  sin pisar sus opciones operativas de pausa, agenda o notificaciones.
+- Agrega una prueba local completa de API, cola, worker y snapshot, más un
+  diagnóstico de fuentes que no persiste publicaciones ni envía correo.
+- La UI muestra el endpoint y el campo rechazado cuando la API devuelve 422.
+
 ## 0.1.7
 
 - Exige contexto de videojuegos para términos ambiguos del perfil Consolas como

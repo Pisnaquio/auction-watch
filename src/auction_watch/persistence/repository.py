@@ -228,7 +228,13 @@ class ProfileRepository:
                 raise SystemProfileImmutableError(profile.id)
             if current.kind == "system":
                 current_profile = self._row_to_stored(session, current).profile
-                unchanged_seed = profile.model_copy(update={"enabled": current_profile.enabled})
+                unchanged_seed = profile.model_copy(
+                    update={
+                        "enabled": current_profile.enabled,
+                        "notification_mode": current_profile.notification_mode,
+                        "schedule": current_profile.schedule,
+                    }
+                )
                 if profile.seed_version < current_profile.seed_version or (
                     profile.seed_version == current_profile.seed_version
                     and unchanged_seed != current_profile
@@ -298,7 +304,13 @@ class ProfileRepository:
             raise SystemProfileImmutableError(profile.id)
         if existing.profile.seed_version >= profile.seed_version:
             return existing
-        upgraded = profile.model_copy(update={"enabled": existing.profile.enabled})
+        upgraded = profile.model_copy(
+            update={
+                "enabled": existing.profile.enabled,
+                "notification_mode": existing.profile.notification_mode,
+                "schedule": existing.profile.schedule,
+            }
+        )
         return self.replace(upgraded, expected_revision=existing.revision)
 
     def clone(self, profile_id: str, new_id: str, name: str | None = None) -> StoredProfile:
