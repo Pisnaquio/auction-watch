@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.10
+
+- Corrige la persistencia secuencial de todas las fuentes después de
+  consultarlas en paralelo, antes de construir el snapshot.
+- Agrega una regresión determinista de dos fuentes que exige ejecución,
+  persistencia y snapshot completos.
+
 ## 0.1.9
 
 - Consulta las fuentes en paralelo con un transporte aislado por fuente y
