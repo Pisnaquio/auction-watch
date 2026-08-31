@@ -119,6 +119,62 @@ def test_profile_api_protects_seed_and_supports_editable_crud(tmp_path: Path) ->
         assert clone.json()["protected"] is False
 
 
+def test_search_guide_and_warnings_are_visible_and_non_destructive(tmp_path: Path) -> None:
+    application = create_app(Settings(data_dir=tmp_path, worker_enabled=False))
+    with TestClient(application) as client:
+        guide = client.get("/api/v1/search-guide")
+        assert guide.status_code == 200
+        payload = guide.json()
+        assert payload["title"] == "Cómo buscar mejor"
+        assert {item["status"] for item in payload["statuses"]} == {
+            "complete",
+            "partial",
+            "failed",
+        }
+        assert {item["name"] for item in payload["recipes"]} >= {
+            "Consolas",
+            "Discos de música",
+            "Libros",
+            "Mesa de pool",
+            "Mesa de ping pong",
+        }
+        assert {item["id"] for item in payload["sources"]} == {
+            "bavastro",
+            "castells",
+            "prado",
+            "remotes",
+            "todoremates",
+        }
+
+        empty = profile_payload("empty-guidance")
+        empty["keywords_any"] = []
+        empty["keywords_all"] = []
+        empty["exact_phrases"] = []
+        empty["boost_keywords"] = {}
+        warned = client.post("/api/v1/search-guidance", json={"profile": empty})
+        assert warned.status_code == 200
+        assert [item["code"] for item in warned.json()["warnings"]] == [
+            "no_positive_terms"
+        ]
+
+        restrictive = profile_payload("restrictive-guidance")
+        restrictive["keywords_any"] = []
+        restrictive["keywords_all"] = ["mesa", "ping", "pong", "profesional"]
+        warned = client.post("/api/v1/search-guidance", json={"profile": restrictive})
+        assert [item["code"] for item in warned.json()["warnings"]] == [
+            "too_many_required_terms",
+            "move_required_terms_to_any",
+        ]
+
+        before = client.get("/api/v1/profiles/consolas").json()
+        clean = client.post(
+            "/api/v1/search-guidance", json={"profile": profile_payload("clean-guidance")}
+        )
+        assert clean.json() == {"warnings": []}
+        after = client.get("/api/v1/profiles/consolas").json()
+        assert after == before
+
+
 def test_run_idempotency_snapshot_and_opportunity_state_api(tmp_path: Path) -> None:
     application = create_app(
         Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine

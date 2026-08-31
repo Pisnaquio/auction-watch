@@ -29,6 +29,7 @@ from auction_watch.persistence.repository import (
     SystemProfileImmutableError,
 )
 from auction_watch.runner import RunOutcome
+from auction_watch.search_guidance import GuidanceCriteria, profile_warnings, search_guide
 
 
 class ProfileCreateRequest(BaseModel):
@@ -94,6 +95,12 @@ class NotificationModeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["disabled", "matches", "matches_or_failure"]
+
+
+class SearchGuidanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile: GuidanceCriteria
 
 
 def _repositories(request: Request) -> tuple[ProfileRepository, OperationalRepository]:
@@ -266,6 +273,16 @@ def list_sources() -> list[dict[str, str]]:
         {"source_id": spec.source_id, "label": spec.label}
         for spec in DEFAULT_SOURCE_REGISTRY.specs()
     ]
+
+
+@router.get("/search-guide")
+def get_search_guide() -> dict[str, object]:
+    return search_guide()
+
+
+@router.post("/search-guidance")
+def get_search_guidance(body: SearchGuidanceRequest) -> dict[str, object]:
+    return {"warnings": list(profile_warnings(body.profile))}
 
 
 @router.get("/profiles")

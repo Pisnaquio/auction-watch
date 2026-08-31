@@ -95,6 +95,23 @@ def test_local_api_queue_worker_snapshot_flow(tmp_path: Path) -> None:
     with TestClient(application) as client:
         created = client.post("/api/v1/profiles", json={"profile": profile_payload()})
         assert created.status_code == 201
+        stored = client.get("/api/v1/profiles/local-smoke")
+        assert stored.status_code == 200
+        assert stored.json()["profile"]["keywords_any"] == ["console"]
+        updated_profile = stored.json()["profile"]
+        updated_profile["exclude_keywords"] = ["réplica"]
+        updated_profile["price_filter"] = {
+            "maximum": "5000",
+            "currency": "UYU",
+            "on_unknown": "include",
+        }
+        saved = client.patch(
+            "/api/v1/profiles/local-smoke",
+            json={"profile": updated_profile, "expected_revision": 1},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["revision"] == 2
+        assert saved.json()["profile"]["exclude_keywords"] == ["réplica"]
         queued = client.post(
             "/api/v1/runs",
             headers={"Idempotency-Key": "local-smoke-run"},

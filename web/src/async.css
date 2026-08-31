@@ -6,3 +6,41 @@ select { width: 100%; margin-top: 6px; border: 1px solid #d8e1e9; border-radius:
 .run-dot.completed, .run-dot.sent { background: #3aa486; }
 .run-dot.partial, .run-dot.pending, .run-dot.sending { background: #d5a32d; }
 .run-dot.failed { background: #c85a66; }
+.help-button { background: #e8f5f2; color: #176e67; border: 1px solid #c9e8e2; }
+.guidance-warning { margin: 18px 0 12px; padding: 14px; border: 1px solid #efd796; border-radius: 9px; background: #fff9e8; color: #705713; font-size: 12px; }
+.guidance-warning strong { display: block; font-size: 13px; margin-bottom: 7px; }
+.guidance-warning ul { margin: 0 0 11px; padding-left: 18px; line-height: 1.5; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 22px; background: #071526b8; backdrop-filter: blur(5px); }
+.search-guide-dialog { width: min(960px, 100%); max-height: min(860px, calc(100vh - 44px)); overflow: auto; border: 1px solid #dce6ec; border-radius: 16px; background: #f8fafc; box-shadow: 0 24px 70px #07152666; color: #203044; }
+.guide-header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 22px 26px 18px; border-bottom: 1px solid #e0e8ee; background: #f8fafcf2; backdrop-filter: blur(10px); }
+.guide-header h2 { margin: 0; color: #17283b; font-size: 24px; }
+.dialog-close { width: 36px; height: 36px; border: 0; border-radius: 9px; background: #e7edf1; color: #37516a; font-size: 25px; line-height: 1; cursor: pointer; }
+.guide-content { display: grid; gap: 26px; padding: 24px 26px 32px; }
+.guide-content section { display: grid; gap: 12px; }
+.guide-content h3 { margin: 0; color: #1d3145; font-size: 16px; }
+.guide-content p { margin: 0; color: #607489; font-size: 13px; line-height: 1.55; }
+.guide-intro { padding: 15px 17px; border-radius: 10px; background: #e7f5f2; color: #176e67 !important; font-weight: 700; }
+.guide-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.guide-card { padding: 14px; border: 1px solid #e0e8ee; border-radius: 10px; background: #fff; }
+.guide-card h4 { margin: 0 0 7px; color: #243b51; font-size: 13px; }
+.guide-card p { margin-bottom: 8px; }
+.guide-card small { color: #17756d; font-weight: 700; }
+.guide-note { padding: 10px 12px; border-radius: 8px; background: #fff3cc; color: #725915; font-size: 12px; line-height: 1.45; }
+.guide-card .guide-note { margin-top: 9px; }
+.guide-source-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.guide-source-list div { display: grid; gap: 3px; padding: 11px 12px; border: 1px solid #e2e9ef; border-radius: 8px; background: #fff; }
+.guide-source-list strong { color: #294156; font-size: 12px; }
+.guide-source-list span { color: #6b7e90; font-size: 11px; line-height: 1.4; }
+.guide-status-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.guide-status { display: grid; gap: 5px; padding: 12px; border-radius: 9px; border: 1px solid #e1e8ed; background: #fff; }
+.guide-status strong { text-transform: uppercase; font-size: 10px; letter-spacing: .08em; }
+.guide-status span, .guide-status small { color: #63788b; font-size: 11px; line-height: 1.4; }
+.guide-status.complete strong { color: #25846f; }
+.guide-status.partial strong { color: #a87608; }
+.guide-status.failed strong { color: #af4353; }
+.guide-recipes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.guide-recipes article { display: grid; gap: 4px; padding: 12px; border-radius: 9px; background: #fff; border: 1px solid #e1e8ed; }
+.guide-recipes strong { color: #294156; font-size: 12px; }
+.guide-recipes span { color: #6c7e90; font-size: 11px; line-height: 1.4; }
+.guide-flow { display: grid; gap: 7px; margin: 0; padding-left: 22px; color: #536b7f; font-size: 12px; line-height: 1.45; }
+@media(max-width:700px){.dialog-backdrop{padding:0}.search-guide-dialog{max-height:100vh;height:100vh;border-radius:0}.guide-header,.guide-content{padding-left:17px;padding-right:17px}.guide-grid,.guide-source-list,.guide-status-list,.guide-recipes{grid-template-columns:1fr}.help-button{order:3;width:100%}}
