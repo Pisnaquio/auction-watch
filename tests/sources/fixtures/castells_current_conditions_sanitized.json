@@ -1,0 +1,26 @@
+{
+  "result": {
+    "Data": [
+      {
+        "LoteId": "77:1",
+        "LoteDescripcion": "Consola de prueba",
+        "ValorActual": "1.200",
+        "LotePrecioSalidaMonedaWF": "UYU",
+        "Estado": "Activo"
+      },
+      {
+        "LoteId": "77:2",
+        "LoteDescripcion": "Lote con moneda opcional desconocida",
+        "DetalleUrl": "frontend.sitio.visualremate.aspx?Remate=77&Lote=2",
+        "ValorActual": "500",
+        "LotePrecioSalidaMonedaWF": "N/D",
+        "Estado": "Activo"
+      },
+      {
+        "LoteId": "77:3",
+        "DetalleUrl": "frontend.sitio.visualremate.aspx?Remate=77&Lote=3"
+      },
+      "entrada-no-estructurada"
+    ]
+  }
+}

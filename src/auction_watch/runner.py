@@ -495,6 +495,9 @@ class AuctionRunEngine:
                         for receipt in results[source_id].receipts
                     ],
                     "errors": [_sanitize_error(error) for error in results[source_id].errors],
+                    "warnings": [
+                        _sanitize_error(warning) for warning in results[source_id].warnings
+                    ],
                 }
                 for source_id in source_ids
             ],

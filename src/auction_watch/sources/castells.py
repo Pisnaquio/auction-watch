@@ -1,19 +1,24 @@
-"""Castells adapter: HTML/GXState discovery plus the public lots endpoint."""
+"""Castells adapter: bounded GXState discovery and verifiable lot pagination."""
 
 from __future__ import annotations
 
 import html
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
-from typing import Any
-from urllib.parse import urlencode, urljoin
+from typing import Any, Literal
+from urllib.parse import urlencode, urljoin, urlsplit
+
+import httpx
 
 from auction_watch.core.models import AuctionGroup, AuctionLot
+from auction_watch.core.validation import external_id
 from auction_watch.sources.base import BaseAuctionSource
 from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
 from auction_watch.sources.parsing import (
@@ -28,41 +33,105 @@ from auction_watch.sources.transport import Transport, decode_response
 WEB_BASE = "https://subastascastells.com/"
 HOME_URL = urljoin(WEB_BASE, "frontend.home.aspx")
 LOTS_URL = urljoin(WEB_BASE, "rest/API/Remate/lotes")
-LOT_LIMIT = 9999
-MAX_PAGES = 50
-MAX_WORKERS = 6
+LOT_PAGE_SIZE = 500
+MAX_PAGES = 20
+MAX_WORKERS = 3
 MAX_REQUESTS = 160
-# Six bounded workers keep the normal scan below the observed two-minute run.
-MAX_SCAN_SECONDS = 90.0
+MAX_SCAN_SECONDS = 150.0
+
+IssueCategory = Literal[
+    "http_error",
+    "timeout",
+    "invalid_gxstate",
+    "invalid_price_currency",
+    "pagination",
+    "invalid_lot",
+    "request_budget",
+    "structure_drift",
+]
+
+ISSUE_LABELS: dict[IssueCategory, str] = {
+    "http_error": "HTTP error",
+    "timeout": "timeout",
+    "invalid_gxstate": "invalid JSON/GXState",
+    "invalid_price_currency": "invalid price/currency",
+    "pagination": "incomplete pagination",
+    "invalid_lot": "invalid lot",
+    "request_budget": "request budget exhausted",
+    "structure_drift": "structure drift",
+}
 
 
-def _error_label(exc: Exception) -> str:
-    message = str(exc)
-    if message == "Castells scan deadline exceeded":
-        return "deadline exceeded"
-    if message == "Castells scan request budget exhausted":
-        return "request budget exhausted"
-    return type(exc).__name__
+class _CastellsIssue(RuntimeError):
+    def __init__(self, category: IssueCategory) -> None:
+        super().__init__(category)
+        self.category = category
 
 
-def _summarize_group_errors(group_id: str, errors: list[str]) -> tuple[str, ...]:
-    """Keep receipt counts exact without bloating snapshots with per-lot noise."""
+@dataclass(frozen=True)
+class _FetchedLots:
+    rows: tuple[Mapping[str, Any], ...]
+    invalid_entries: int = 0
+    issue: IssueCategory | None = None
 
-    counts: dict[str, int] = {}
-    for error in errors:
-        label = error.rsplit(": ", 1)[-1]
-        counts[label] = counts.get(label, 0) + 1
-    return tuple(
-        f"Castells group {group_id}: {label} ({count})"
-        for label, count in sorted(counts.items())
-    )
+
+@dataclass(frozen=True)
+class _GroupScan:
+    group: AuctionGroup
+    lots: tuple[AuctionLot, ...]
+    receipt: GroupReceipt
+    issues: tuple[IssueCategory, ...] = ()
+    warnings: tuple[IssueCategory, ...] = ()
+
+
+def _classify_exception(exc: Exception, *, discovery: bool = False) -> IssueCategory:
+    if isinstance(exc, _CastellsIssue):
+        return exc.category
+    if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+        return "timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return "http_error"
+    if isinstance(exc, (httpx.NetworkError, httpx.TransportError)):
+        return "http_error"
+    message = str(exc).lower()
+    if "deadline" in message or "timed out" in message or "timeout" in message:
+        return "timeout"
+    if "request budget" in message:
+        return "request_budget"
+    if "pagination" in message or "next cycle" in message or "page limit" in message:
+        return "pagination"
+    if discovery:
+        return "invalid_gxstate"
+    return "structure_drift"
+
+
+def _aggregate_issues(
+    groups_by_category: Mapping[IssueCategory, set[str]],
+    *,
+    discovery_counts: Mapping[IssueCategory, int] | None = None,
+) -> tuple[str, ...]:
+    summaries: list[str] = []
+    for category in ISSUE_LABELS:
+        group_count = len(groups_by_category.get(category, set()))
+        discovery_count = (discovery_counts or {}).get(category, 0)
+        if group_count:
+            summaries.append(
+                f"Castells {ISSUE_LABELS[category]} ({group_count} "
+                f"{'group' if group_count == 1 else 'groups'})"
+            )
+        if discovery_count:
+            summaries.append(
+                f"Castells {ISSUE_LABELS[category]} ({discovery_count} discovery "
+                f"{'record' if discovery_count == 1 else 'records'})"
+            )
+    return tuple(summaries)
 
 
 def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
     if "GXState" not in document or "RemateImagen" not in document:
-        raise ValueError("Castells response lacks GXState auction marker")
+        raise _CastellsIssue("invalid_gxstate")
     records: list[Mapping[str, Any]] = []
-    for raw in re.findall(r"\{[^{}]*\"RemateImagen\"[^{}]*\"RemateNombre\"[^{}]*\}", document):
+    for raw in re.findall(r'\{[^{}]*"RemateImagen"[^{}]*"RemateNombre"[^{}]*\}', document):
         try:
             item = json.loads(html.unescape(raw))
         except json.JSONDecodeError:
@@ -70,14 +139,18 @@ def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
         if isinstance(item, Mapping):
             records.append(item)
     if not records:
-        raise ValueError("Castells GXState contains no auction records")
+        raise _CastellsIssue("invalid_gxstate")
     return tuple(records)
 
 
 def _canonical_auctions(
     records: tuple[Mapping[str, Any], ...],
-) -> tuple[tuple[Mapping[str, Any], ...], tuple[str, ...], frozenset[str]]:
-    """Collapse repeated GXState render records before scheduling network work."""
+) -> tuple[
+    tuple[Mapping[str, Any], ...],
+    Counter[IssueCategory],
+    frozenset[str],
+]:
+    """Collapse repeated GXState records and isolate invalid discovery entries."""
 
     ordered = sorted(
         records,
@@ -87,21 +160,86 @@ def _canonical_auctions(
         ),
     )
     unique: dict[str, Mapping[str, Any]] = {}
-    errors: list[str] = []
+    discovery_issues: Counter[IssueCategory] = Counter()
     conflicted: set[str] = set()
     for raw in ordered:
-        group_id = clean_text(raw.get("RemateId"))
-        if not group_id:
-            errors.append("Castells discovery item lacks RemateId")
+        raw_group_id = clean_text(raw.get("RemateId"))
+        try:
+            group_id = external_id(raw_group_id, "auction_id")
+        except ValueError:
+            discovery_issues["structure_drift"] += 1
             continue
         previous = unique.get(group_id)
         if previous is None:
             unique[group_id] = raw
             continue
         if previous != raw:
-            errors.append(f"Castells group {group_id}: conflicting discovery records")
             conflicted.add(group_id)
-    return tuple(unique.values()), tuple(errors), frozenset(conflicted)
+    return tuple(unique.values()), discovery_issues, frozenset(conflicted)
+
+
+def _same_source_url(value: Any, fallback: str) -> str:
+    candidate = urljoin(WEB_BASE, clean_text(value)) if value else fallback
+    parsed = urlsplit(candidate)
+    expected = urlsplit(WEB_BASE)
+    if parsed.scheme in {"http", "https"} and parsed.netloc == expected.netloc:
+        return candidate
+    return fallback
+
+
+def _decode_lot_page(payload: Any) -> tuple[tuple[Any, ...], Any]:
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise _CastellsIssue("structure_drift") from exc
+    node = payload
+    for _depth in range(3):
+        if not isinstance(node, Mapping):
+            break
+        for key in ("data", "Data", "rows", "Rows"):
+            rows = node.get(key)
+            if isinstance(rows, list):
+                next_value = next(
+                    (node[name] for name in ("next", "Next", "nextPage") if node.get(name)),
+                    None,
+                )
+                return tuple(rows), next_value
+        nested = next(
+            (
+                node[name]
+                for name in ("result", "Result", "payload")
+                if isinstance(node.get(name), Mapping)
+            ),
+            None,
+        )
+        if nested is None:
+            break
+        node = nested
+    raise _CastellsIssue("structure_drift")
+
+
+def _pagination_url(current_url: str, next_value: Any) -> str:
+    candidate = urljoin(current_url, clean_text(next_value))
+    parsed = urlsplit(candidate)
+    expected = urlsplit(LOTS_URL)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc != expected.netloc:
+        raise _CastellsIssue("pagination")
+    if parsed.path.rstrip("/") != expected.path.rstrip("/"):
+        raise _CastellsIssue("pagination")
+    return candidate
+
+
+def _lot_cursor(item: Any) -> str:
+    if not isinstance(item, Mapping):
+        return ""
+    raw = clean_text(
+        item.get("LoteId")
+        or item.get("Loteid")
+        or item.get("Id")
+        or item.get("id")
+    )
+    return raw.rsplit(":", 1)[-1] if raw else ""
 
 
 class CastellsSource(BaseAuctionSource):
@@ -117,6 +255,8 @@ class CastellsSource(BaseAuctionSource):
         max_workers: int = MAX_WORKERS,
         max_requests: int = MAX_REQUESTS,
         deadline_seconds: float = MAX_SCAN_SECONDS,
+        page_size: int = LOT_PAGE_SIZE,
+        max_pages: int = MAX_PAGES,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         super().__init__(transport, timeout=timeout)
@@ -126,9 +266,15 @@ class CastellsSource(BaseAuctionSource):
             raise ValueError("Castells max_requests must be positive")
         if deadline_seconds <= 0:
             raise ValueError("Castells deadline_seconds must be positive")
+        if page_size < 1 or page_size > LOT_PAGE_SIZE:
+            raise ValueError("Castells page_size is outside the safe bound")
+        if max_pages < 1 or max_pages > MAX_PAGES:
+            raise ValueError("Castells max_pages is outside the safe bound")
         self.max_workers = min(max_workers, MAX_WORKERS)
         self.max_requests = max_requests
         self.deadline_seconds = deadline_seconds
+        self.page_size = page_size
+        self.max_pages = max_pages
         self.clock = clock
         self._request_count = 0
         self._request_lock = Lock()
@@ -140,115 +286,153 @@ class CastellsSource(BaseAuctionSource):
                 raise RuntimeError("Castells scan deadline is not initialized")
             remaining = self._deadline - self.clock()
             if remaining <= 0:
-                raise RuntimeError("Castells scan deadline exceeded")
+                raise _CastellsIssue("timeout")
             if self._request_count >= self.max_requests:
-                raise RuntimeError("Castells scan request budget exhausted")
+                raise _CastellsIssue("request_budget")
             self._request_count += 1
-        return decode_response(
-            self.transport.get(
-                url,
-                timeout=min(self.timeout, remaining),
-                deadline=self._deadline,
+        try:
+            return decode_response(
+                self.transport.get(
+                    url,
+                    timeout=min(self.timeout, remaining),
+                    deadline=self._deadline,
+                )
             )
-        )
+        except Exception as exc:
+            raise _CastellsIssue(_classify_exception(exc)) from exc
 
-    def _fetch_lots(
-        self, group: AuctionGroup, remate_type: int
-    ) -> tuple[tuple[Mapping[str, Any], ...], bool]:
-        params = {
+    def _fetch_lots(self, group: AuctionGroup, remate_type: int) -> _FetchedLots:
+        params: dict[str, Any] = {
             "Remateid": group.auction_id,
             "RemateTipo": remate_type,
             "Cerrado": "false",
             "Lastloteid": 0,
-            "Limit": LOT_LIMIT,
+            "Limit": self.page_size,
             "Timezoneoffset": -180,
             "ClienteId": 0,
         }
         rows: list[Mapping[str, Any]] = []
+        invalid_entries = 0
         request_url = f"{LOTS_URL}?{urlencode(params)}"
         seen_urls: set[str] = set()
-        page = 0
-        while True:
-            page += 1
+        seen_cursors: set[str] = set()
+        for _page in range(self.max_pages):
             if request_url in seen_urls:
-                raise ValueError("Castells lots next cycle")
-            if page > MAX_PAGES:
-                raise ValueError("Castells lots exceeded page limit")
+                return _FetchedLots(tuple(rows), invalid_entries, "pagination")
             seen_urls.add(request_url)
-            payload = self._get(request_url)
-            if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
-                raise ValueError("Castells lots response lacks data")
-            rows.extend(item for item in payload["data"] if isinstance(item, Mapping))
-            next_url = payload.get("next")
-            if next_url:
-                request_url = urljoin(request_url, str(next_url))
+            try:
+                payload = self._get(request_url)
+                page_rows, next_value = _decode_lot_page(payload)
+            except Exception as exc:
+                category = _classify_exception(exc)
+                if rows:
+                    return _FetchedLots(tuple(rows), invalid_entries, category)
+                raise _CastellsIssue(category) from exc
+            mappings = tuple(item for item in page_rows if isinstance(item, Mapping))
+            invalid_entries += len(page_rows) - len(mappings)
+            rows.extend(mappings)
+            if next_value:
+                try:
+                    request_url = _pagination_url(request_url, next_value)
+                except _CastellsIssue:
+                    return _FetchedLots(tuple(rows), invalid_entries, "pagination")
                 continue
-            if len(payload["data"]) >= LOT_LIMIT:
-                return tuple(rows), False
-            return tuple(rows), True
+            if len(page_rows) < self.page_size:
+                return _FetchedLots(tuple(rows), invalid_entries)
+            cursor = _lot_cursor(page_rows[-1] if page_rows else None)
+            if not cursor or cursor in seen_cursors:
+                return _FetchedLots(tuple(rows), invalid_entries, "pagination")
+            seen_cursors.add(cursor)
+            params["Lastloteid"] = cursor
+            request_url = f"{LOTS_URL}?{urlencode(params)}"
+        return _FetchedLots(tuple(rows), invalid_entries, "pagination")
 
-    def _scan_group(
-        self, raw: Mapping[str, Any]
-    ) -> tuple[AuctionGroup | None, tuple[AuctionLot, ...], GroupReceipt, tuple[str, ...]]:
-        group_id = clean_text(raw.get("RemateId"))
+    def _scan_group(self, raw: Mapping[str, Any]) -> _GroupScan:
+        group_id = external_id(clean_text(raw.get("RemateId")), "auction_id")
         started = datetime.now(UTC)
-        group: AuctionGroup | None = None
+        canonical_group_url = urljoin(
+            WEB_BASE,
+            f"frontend.sitio.visualremate.aspx?Remate={group_id}",
+        )
+        group = AuctionGroup(
+            source_id=self.source_id,
+            auction_id=group_id,
+            title=clean_text(raw.get("RemateNombre")) or f"Remate {group_id}",
+            url=_same_source_url(raw.get("Link"), canonical_group_url),
+            category=clean_text(raw.get("RemateCategoriaNombre")),
+            active=True,
+            closing_at=utc_datetime(raw.get("RemateCierre")),
+            observed_at=started,
+        )
+        issues: list[IssueCategory] = []
+        warnings: list[IssueCategory] = []
         try:
-            if not group_id:
-                raise ValueError("auction lacks RemateId")
-            group = AuctionGroup(
-                source_id=self.source_id,
-                auction_id=group_id,
-                title=clean_text(raw.get("RemateNombre")) or f"Remate {group_id}",
-                url=urljoin(
-                    WEB_BASE,
-                    clean_text(raw.get("Link"))
-                    or f"frontend.sitio.visualremate.aspx?Remate={group_id}",
-                ),
-                category=clean_text(raw.get("RemateCategoriaNombre")),
-                active=True,
-                closing_at=utc_datetime(raw.get("RemateCierre")),
-                observed_at=started,
-            )
-            raw_lots, pagination_complete = self._fetch_lots(
-                group, int(raw.get("RemateTipo") or 1)
-            )
-            if not pagination_complete:
-                raise ValueError("lots pagination reached the hard limit")
+            try:
+                remate_type = int(raw.get("RemateTipo") or 1)
+                if remate_type < 1:
+                    raise ValueError
+            except (TypeError, ValueError):
+                remate_type = 1
+                issues.append("structure_drift")
+            fetched = self._fetch_lots(group, remate_type)
+            issues.extend("invalid_lot" for _ in range(fetched.invalid_entries))
+            if fetched.issue is not None:
+                issues.append(fetched.issue)
             group_lots: dict[str, AuctionLot] = {}
             conflicted_lot_ids: set[str] = set()
-            group_errors: list[str] = []
-            for item in raw_lots:
+            for item in fetched.rows:
                 try:
-                    lot_id = clean_text(item.get("LoteId") or item.get("Id") or item.get("id"))
-                    title = clean_text(item.get("LoteDescripcion") or item.get("Descripcion"))
-                    raw_lot_url = clean_text(item.get("DetalleUrl"))
-                    if not lot_id or not title or not raw_lot_url:
-                        raise ValueError("lot lacks stable fields")
+                    lot_id = clean_text(
+                        item.get("LoteId")
+                        or item.get("Loteid")
+                        or item.get("Id")
+                        or item.get("id")
+                    )
+                    title = clean_text(
+                        item.get("LoteDescripcion")
+                        or item.get("Descripcion")
+                        or item.get("LoteTitulo")
+                        or item.get("Titulo")
+                        or item.get("Nombre")
+                    )
+                    if not lot_id or not title:
+                        raise ValueError("lot lacks stable identity")
+                    canonical_lot_url = urljoin(
+                        WEB_BASE,
+                        "frontend.sitio.visualremate.aspx?"
+                        + urlencode({"Remate": group_id, "Lote": lot_id}),
+                    )
+                    lot_url = _same_source_url(item.get("DetalleUrl"), canonical_lot_url)
                     price_label = clean_text(
                         item.get("ValorActual") or item.get("LotePrecioSalida")
                     )
                     price = decimal_value(price_label)
                     currency = normalize_currency(item.get("LotePrecioSalidaMonedaWF"))
-                    if price is not None and currency is None:
-                        group_errors.append(f"Castells group {group_id}: unknown currency")
+                    if price_label and (price is None or currency is None):
+                        warnings.append("invalid_price_currency")
                         price = None
+                        currency = None
+                    raw_image = first_image(
+                        item.get("Imagen") or item.get("image"), base=WEB_BASE
+                    )
+                    image_url = (_same_source_url(raw_image, "") if raw_image else None) or None
                     candidate = AuctionLot(
                         source_id=self.source_id,
                         auction_id=group_id,
                         lot_id=lot_id,
                         title=title,
-                        description=title,
+                        description=clean_text(
+                            item.get("LoteDetalle") or item.get("Detalle")
+                        )
+                        or title,
                         category=group.category,
                         price_value=price,
                         price_currency=currency if price is not None else None,
                         price_label=price_label,
                         closing_at=utc_datetime(item.get("LoteCierre")) or group.closing_at,
-                        lot_url=urljoin(WEB_BASE, raw_lot_url),
+                        lot_url=lot_url,
                         auction_url=group.url,
-                        image_url=first_image(
-                            item.get("Imagen") or item.get("image"), base=WEB_BASE
-                        ),
+                        image_url=image_url,
                         active=clean_text(item.get("Estado") or "active").lower()
                         not in {"cerrado", "closed"},
                         observed_at=started,
@@ -261,27 +445,31 @@ class CastellsSource(BaseAuctionSource):
                     elif previous != candidate:
                         group_lots.pop(lot_id)
                         conflicted_lot_ids.add(lot_id)
-                        group_errors.append(
-                            f"Castells group {group_id}: conflicting duplicate lot"
-                        )
+                        issues.append("invalid_lot")
                 except (TypeError, ValueError):
-                    group_errors.append(f"Castells group {group_id}: malformed lot")
+                    issues.append("invalid_lot")
             ordered_lots = tuple(group_lots[key] for key in sorted(group_lots))
-            status = "partial" if group_errors else "complete"
+            status = "partial" if issues else "complete"
             receipt = GroupReceipt(
                 group_id=group_id,
                 status=status,
                 inventory_authoritative=status == "complete",
                 lot_count=len(ordered_lots),
-                error_count=len(group_errors),
+                error_count=len(issues),
                 started_at=started,
                 finished_at=datetime.now(UTC),
             )
-            return group, ordered_lots, receipt, _summarize_group_errors(group_id, group_errors)
+            return _GroupScan(
+                group,
+                ordered_lots,
+                receipt,
+                tuple(issues),
+                tuple(warnings),
+            )
         except Exception as exc:
-            error = f"Castells group {group_id or 'unknown'}: {_error_label(exc)}"
+            category = _classify_exception(exc)
             receipt = GroupReceipt(
-                group_id=group_id or "unknown",
+                group_id=group_id,
                 status="failed",
                 inventory_authoritative=False,
                 lot_count=0,
@@ -289,11 +477,7 @@ class CastellsSource(BaseAuctionSource):
                 started_at=started,
                 finished_at=datetime.now(UTC),
             )
-            # Discovery was successful even if this group could not be fetched.
-            # Keeping its identity lets the runner record a failed receipt for the
-            # group and preserve previous inventory instead of rejecting all
-            # otherwise-valid sources as a contract violation.
-            return group, (), receipt, (error,)
+            return _GroupScan(group, (), receipt, (category,))
 
     def scan(self) -> SourceScanResult:
         with self._request_lock:
@@ -302,26 +486,34 @@ class CastellsSource(BaseAuctionSource):
         try:
             document = self._get(self.discovery_url)
             if not isinstance(document, str):
-                raise ValueError("Castells discovery must be HTML text")
-            auctions, discovery_errors, conflicted_groups = _canonical_auctions(
+                raise _CastellsIssue("invalid_gxstate")
+            auctions, discovery_issues, conflicted_groups = _canonical_auctions(
                 parse_gxstate(document)
             )
         except Exception as exc:
+            category = _classify_exception(exc, discovery=True)
             return SourceScanResult(
                 source_id=self.source_id,
                 label=self.label,
                 discovery_status="failed",
-                errors=(f"Castells discovery failed ({_error_label(exc)})",),
+                errors=(f"Castells {ISSUE_LABELS[category]} (discovery)",),
             )
 
         groups: list[AuctionGroup] = []
         lots: list[AuctionLot] = []
         receipts: list[GroupReceipt] = []
-        errors: list[str] = list(discovery_errors)
+        issue_groups: dict[IssueCategory, set[str]] = {
+            category: set() for category in ISSUE_LABELS
+        }
+        warning_groups: dict[IssueCategory, set[str]] = {
+            category: set() for category in ISSUE_LABELS
+        }
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            results = executor.map(self._scan_group, auctions)
-            for group, group_lots, receipt, group_errors in results:
+            for scanned in executor.map(self._scan_group, auctions):
+                receipt = scanned.receipt
+                issues = list(scanned.issues)
                 if receipt.group_id in conflicted_groups:
+                    issues.append("structure_drift")
                     receipt = receipt.model_copy(
                         update={
                             "status": "failed" if receipt.status == "failed" else "partial",
@@ -329,21 +521,27 @@ class CastellsSource(BaseAuctionSource):
                             "error_count": receipt.error_count + 1,
                         }
                     )
-                if group is not None:
-                    groups.append(group)
-                    lots.extend(group_lots)
+                groups.append(scanned.group)
+                lots.extend(scanned.lots)
                 receipts.append(receipt)
-                errors.extend(group_errors)
-        if self._deadline is not None and self.clock() >= self._deadline:
-            if "Castells scan deadline exceeded" not in errors:
-                errors.append("Castells scan deadline exceeded")
+                for category in set(issues):
+                    issue_groups[category].add(receipt.group_id)
+                for category in set(scanned.warnings):
+                    warning_groups[category].add(receipt.group_id)
+        errors = _aggregate_issues(issue_groups, discovery_counts=discovery_issues)
+        warnings = _aggregate_issues(warning_groups)
+        authoritative = not errors and all(
+            receipt.status == "complete" and receipt.inventory_authoritative
+            for receipt in receipts
+        )
         return SourceScanResult(
             source_id=self.source_id,
             label=self.label,
             groups=tuple(groups),
             lots=tuple(lots),
-            discovery_status="complete" if not errors else "partial",
-            inventory_authoritative=not errors,
+            discovery_status="complete" if authoritative else "partial",
+            inventory_authoritative=authoritative,
             receipts=tuple(receipts),
-            errors=tuple(errors),
+            errors=errors,
+            warnings=warnings,
         )

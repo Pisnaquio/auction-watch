@@ -237,6 +237,103 @@ def test_parallel_sources_are_all_persisted_before_snapshot(tmp_path: Path) -> N
         database.dispose()
 
 
+def test_partial_source_keeps_healthy_source_results_in_snapshot(tmp_path: Path) -> None:
+    partial_state = SourceState(
+        SourceScanResult(
+            source_id="fake",
+            label="Fake",
+            groups=(group(),),
+            discovery_status="partial",
+            inventory_authoritative=False,
+            receipts=(
+                GroupReceipt(
+                    group_id="auction:1",
+                    status="failed",
+                    inventory_authoritative=False,
+                    lot_count=0,
+                    error_count=1,
+                    started_at=NOW,
+                    finished_at=NOW,
+                ),
+            ),
+            errors=("Fake timeout (1 group)",),
+        )
+    )
+    healthy_group = AuctionGroup(
+        source_id="other",
+        auction_id="healthy-auction",
+        title="Healthy auction",
+        url="https://other.test/auction",
+        observed_at=NOW,
+        active=True,
+    )
+    healthy_lot = AuctionLot(
+        source_id="other",
+        auction_id=healthy_group.auction_id,
+        lot_id="healthy-console",
+        title="Console healthy",
+        description="Result from the complete source",
+        lot_url="https://other.test/lot",
+        auction_url=healthy_group.url,
+        observed_at=NOW,
+        active=True,
+    )
+    healthy_state = SourceState(
+        SourceScanResult(
+            source_id="other",
+            label="Other fake",
+            groups=(healthy_group,),
+            lots=(healthy_lot,),
+            discovery_status="complete",
+            inventory_authoritative=True,
+            receipts=(
+                GroupReceipt(
+                    group_id=healthy_group.auction_id,
+                    status="complete",
+                    inventory_authoritative=True,
+                    lot_count=1,
+                    error_count=0,
+                    started_at=NOW,
+                    finished_at=NOW,
+                ),
+            ),
+        )
+    )
+    database = Database.open(tmp_path)
+    upgrade_head(tmp_path, database.engine)
+    profiles = ProfileRepository(database)
+    profiles.create(profile().model_copy(update={"source_ids": ("fake", "other")}))
+    registry = SourceRegistry(
+        (
+            SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, partial_state)),
+            SourceSpec(
+                "other",
+                "Other fake",
+                lambda transport: OtherFakeSource(transport, healthy_state),
+            ),
+        )
+    )
+    runner = AuctionRunEngine(
+        database,
+        source_registry=registry,
+        transport_factory=lambda: object(),
+        now=lambda: NOW,
+    )
+    try:
+        outcome = runner.run("profile-a", request_id="partial-with-healthy-source")
+        assert outcome.status == "partial"
+        assert outcome.snapshot_id is not None
+        snapshot = OperationalRepository(database).snapshot_for_run(outcome.run_id)
+        assert snapshot is not None
+        assert {
+            item["source_id"]: item["status"] for item in snapshot.payload_json["sources"]
+        } == {"fake": "partial", "other": "complete"}
+        matches = snapshot.payload_json["profiles"][0]["matches"]
+        assert [item["lot"]["lot_id"] for item in matches] == ["healthy-console"]
+    finally:
+        database.dispose()
+
+
 def test_partial_source_preserves_previous_inventory_and_degrades_run(tmp_path: Path) -> None:
     state = SourceState(complete_result(lot()))
     database, runner = engine(tmp_path, state, profile())

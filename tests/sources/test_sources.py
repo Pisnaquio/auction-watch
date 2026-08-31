@@ -23,7 +23,7 @@ from auction_watch.sources import (
     TodoRematesSource,
 )
 from auction_watch.sources.bavastro import API_BASE, LOTS_BASE
-from auction_watch.sources.castells import LOTS_URL
+from auction_watch.sources.castells import LOTS_URL, MAX_WORKERS
 from auction_watch.sources.prado import PRODUCTS_API_URL as PRADO_PRODUCTS_URL
 from auction_watch.sources.todoremates import PRODUCTS_API_URL, REMATES_API_URL
 from auction_watch.sources.transport import HttpxTransport
@@ -236,7 +236,23 @@ def test_castells_json_is_rejected_instead_of_coerced() -> None:
         FakeTransport(lambda _url: FakeResponse(payload={"results": []}))
     ).scan()
     assert result.discovery_status == "failed"
-    assert "Castells" in result.errors[0]
+    assert result.errors == ("Castells invalid JSON/GXState (discovery)",)
+
+
+def test_castells_http_error_is_classified_without_response_details() -> None:
+    request = httpx.Request("GET", LOTS_URL)
+    response = httpx.Response(403, request=request)
+    error = httpx.HTTPStatusError("forbidden details", request=request, response=response)
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        raise error
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.errors == ("Castells HTTP error (1 group)",)
+    assert "forbidden" not in " ".join(result.errors)
 
 
 def test_castells_normalizes_observed_currency_labels_and_isolates_unknowns() -> None:
@@ -259,9 +275,120 @@ def test_castells_normalizes_observed_currency_labels_and_isolates_unknowns() ->
     ]
     assert result.lots[-1].price_label == "500"
     assert result.lots[-1].price_value is None
-    assert result.receipts[0].status == "partial"
-    assert result.receipts[0].error_count == 1
+    assert result.receipts[0].status == "complete"
+    assert result.receipts[0].error_count == 0
+    assert result.inventory_authoritative is True
+    assert result.warnings == ("Castells invalid price/currency (1 group)",)
+
+
+def test_castells_current_conditions_keep_valid_lots_and_classify_drift() -> None:
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        if url.startswith(LOTS_URL):
+            return FakeResponse(payload=load_json("castells_current_conditions_sanitized.json"))
+        raise AssertionError(url)
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "partial"
     assert result.inventory_authoritative is False
+    assert [lot.lot_id for lot in result.lots] == ["77:1", "77:2"]
+    assert result.lots[0].lot_url.endswith("Remate=77&Lote=77%3A1")
+    assert result.lots[1].price_value is None
+    assert result.receipts[0].status == "partial"
+    assert result.receipts[0].lot_count == 2
+    assert result.receipts[0].error_count == 2
+    assert result.errors == ("Castells invalid lot (1 group)",)
+    assert result.warnings == ("Castells invalid price/currency (1 group)",)
+
+
+def test_castells_paginates_with_bounded_cursor_until_short_page() -> None:
+    rows = [
+        {
+            "LoteId": f"77:{index}",
+            "LoteDescripcion": f"Lote {index}",
+            "DetalleUrl": f"frontend.sitio.visualremate.aspx?Remate=77&Lote={index}",
+        }
+        for index in (1, 2, 3)
+    ]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        query = parse_qs(urlsplit(url).query)
+        cursor = query["Lastloteid"][0]
+        assert query["Limit"] == ["2"]
+        return FakeResponse(payload={"data": rows[:2] if cursor == "0" else rows[2:]})
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport, page_size=2).scan()
+
+    assert result.discovery_status == "complete"
+    assert [lot.lot_id for lot in result.lots] == ["77:1", "77:2", "77:3"]
+    assert len(transport.calls) == 3
+
+
+def test_castells_pagination_cycle_is_partial_and_preserves_first_page() -> None:
+    rows = [
+        {
+            "LoteId": f"77:{index}",
+            "LoteDescripcion": f"Lote {index}",
+            "DetalleUrl": f"frontend.sitio.visualremate.aspx?Remate=77&Lote={index}",
+        }
+        for index in (1, 2)
+    ]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload={"data": rows})
+
+    result = CastellsSource(FakeTransport(handler), page_size=2).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.errors == ("Castells incomplete pagination (1 group)",)
+    assert [lot.lot_id for lot in result.lots] == ["77:1", "77:2"]
+    assert result.receipts[0].status == "partial"
+
+
+def test_castells_later_page_timeout_preserves_prior_page() -> None:
+    rows = [
+        {
+            "LoteId": f"77:{index}",
+            "LoteDescripcion": f"Lote {index}",
+            "DetalleUrl": f"frontend.sitio.visualremate.aspx?Remate=77&Lote={index}",
+        }
+        for index in (1, 2)
+    ]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        if parse_qs(urlsplit(url).query)["Lastloteid"] == ["0"]:
+            return FakeResponse(payload={"data": rows})
+        raise TimeoutError("fixture timeout")
+
+    result = CastellsSource(FakeTransport(handler), page_size=2).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.errors == ("Castells timeout (1 group)",)
+    assert [lot.lot_id for lot in result.lots] == ["77:1", "77:2"]
+    assert result.receipts[0].status == "partial"
+
+
+def test_castells_structure_drift_and_worker_bound_are_explicit() -> None:
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload={"unexpected": []})
+
+    source = CastellsSource(FakeTransport(handler), max_workers=99)
+    result = source.scan()
+
+    assert source.max_workers == MAX_WORKERS
+    assert result.errors == ("Castells structure drift (1 group)",)
+    assert result.receipts[0].status == "failed"
 
 
 def test_castells_request_budget_fails_pending_groups_closed() -> None:
@@ -284,6 +411,7 @@ def test_castells_request_budget_fails_pending_groups_closed() -> None:
     assert sum(receipt.status == "failed" for receipt in result.receipts) >= 1
     assert result.inventory_authoritative is False
     assert len(transport.calls) == 2
+    assert result.errors == ("Castells request budget exhausted (2 groups)",)
 
 
 def test_castells_deadline_before_discovery_makes_no_request() -> None:
@@ -296,7 +424,7 @@ def test_castells_deadline_before_discovery_makes_no_request() -> None:
     ).scan()
     assert result.discovery_status == "failed"
     assert result.inventory_authoritative is False
-    assert "deadline exceeded" in result.errors[0]
+    assert result.errors == ("Castells timeout (discovery)",)
     assert transport.calls == []
 
 
@@ -568,6 +696,21 @@ def test_transport_retry_respects_absolute_deadline() -> None:
     transport = HttpxTransport(client, clock=lambda: next(clock_values))
     with pytest.raises(RuntimeError, match="deadline"):
         transport.get("https://example.test/public", timeout=5, deadline=1.0)
+    assert len(requests) == 1
+    client.close()
+
+
+def test_transport_does_not_retry_non_transient_http_error() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(404, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    transport = HttpxTransport(client)
+    with pytest.raises(httpx.HTTPStatusError):
+        transport.get("https://example.test/missing", timeout=2)
     assert len(requests) == 1
     client.close()
 

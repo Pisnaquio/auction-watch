@@ -29,6 +29,9 @@ def summary(source_id: str, result: Any) -> dict[str, object]:
         },
         "authoritative": result.inventory_authoritative,
         "error_types": sorted({str(error).split("(", 1)[0].strip() for error in result.errors}),
+        "warning_types": sorted(
+            {str(warning).split("(", 1)[0].strip() for warning in result.warnings}
+        ),
     }
 
 
@@ -61,6 +64,7 @@ def main() -> int:
                         "receipts": {"complete": 0, "partial": 0, "failed": 0},
                         "authoritative": False,
                         "error_types": [type(exc).__name__],
+                        "warning_types": [],
                     }
                 )
     finally:
