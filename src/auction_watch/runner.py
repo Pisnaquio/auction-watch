@@ -376,10 +376,11 @@ class AuctionRunEngine:
         if any(lot.source_id != expected_source_id for lot in result.lots):
             return "lot belongs to another source"
         group_id_set = set(group_ids)
-        covered_group_ids = {
-            receipt.group_id for receipt in result.receipts if receipt.status != "failed"
-        }
-        if group_id_set != covered_group_ids:
+        # A receipt is required for every discovered group.  A failed receipt is
+        # still coverage: it tells reconciliation to retain that group's prior
+        # inventory.  Excluding it here wrongly escalates one failed group into
+        # a source-wide contract failure and hides healthy-source results.
+        if group_id_set != set(receipt_ids):
             return "groups and coverage receipts do not match"
         if any(lot.auction_id not in group_id_set for lot in result.lots):
             return "lot belongs to an undiscovered group"

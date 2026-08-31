@@ -237,3 +237,40 @@ def test_missing_idempotency_key_and_invalid_opportunity_key_are_rejected(tmp_pa
             "/api/v1/profiles/libros/opportunities/state",
             json={"opportunity_key": "legacy-key", "state": "follow"},
         ).status_code == 422
+
+
+def test_notification_api_redacts_delivery_payload_and_supports_protected_mode(
+    tmp_path: Path,
+) -> None:
+    recipient = "recipient@example.test"
+    password = "test-only-password"
+    application = create_app(
+        Settings(
+            data_dir=tmp_path,
+            worker_enabled=False,
+            smtp_enabled=True,
+            smtp_host="smtp.example.test",
+            smtp_recipient=recipient,
+            smtp_username="user",
+            smtp_password=password,
+        ),
+        run_engine_factory=FakeRunEngine,
+    )
+    with TestClient(application) as client:
+        mode = client.post(
+            "/api/v1/profiles/consolas/notifications/mode",
+            json={"mode": "matches_or_failure"},
+        )
+        assert mode.status_code == 200
+        assert mode.json()["profile"]["notification_mode"] == "matches_or_failure"
+
+        first = client.post("/api/v1/profiles/consolas/notifications/test")
+        second = client.post("/api/v1/profiles/consolas/notifications/test")
+        assert first.status_code == second.status_code == 202
+        assert first.json()["dedupe_key"] == second.json()["dedupe_key"]
+        listed = client.get("/api/v1/profiles/consolas/notifications")
+        assert listed.status_code == 200
+        exposed = first.text + second.text + listed.text
+        assert recipient not in exposed
+        assert password not in exposed
+        assert "payload" not in listed.json()[0]

@@ -5,8 +5,20 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKED_DIRS = ("src", "web/src", "tests", "packaging", "migrations")
-CHECKED_FILES = ("Dockerfile", "docker-compose.yml", ".env.example", "pyproject.toml")
+CHECKED_DIRS = (
+    "src",
+    "web/src",
+    "tests",
+    "packaging",
+    "migrations",
+    "rootfs",
+    "scripts",
+    ".github",
+)
+CHECKED_FILES = (
+    "Dockerfile", "docker-compose.yml", ".env.example", "pyproject.toml", "config.yaml",
+    "repository.yaml", "build.yaml",
+)
 PATTERNS = (
     re.compile(r"console-collection", re.IGNORECASE),
     re.compile(r"/Users/"),
@@ -14,6 +26,10 @@ PATTERNS = (
     re.compile(r"Mail\.app", re.IGNORECASE),
     re.compile(r"launchd", re.IGNORECASE),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{30,}"),
+    re.compile(r"Authorization\s*:\s*Bearer\s+\S+", re.IGNORECASE),
 )
 
 
@@ -32,6 +48,8 @@ def files_to_check() -> list[Path]:
 def main() -> int:
     violations: list[str] = []
     for path in files_to_check():
+        if path.resolve() == Path(__file__).resolve():
+            continue
         text = path.read_text(encoding="utf-8")
         for pattern in PATTERNS:
             if pattern.search(text):

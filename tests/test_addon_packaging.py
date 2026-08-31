@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import tarfile
 from pathlib import Path
 
@@ -43,6 +44,33 @@ def test_addon_runtime_enables_worker_only_in_addon_environment(tmp_path: Path) 
     assert environment["AW_DATA_DIR"] == "/data/auction-watch"
     assert environment["AW_SMTP_ENABLED"] == "false"
     assert "AW_SMTP_PASSWORD" not in environment
+
+
+def test_smtp_secret_is_redacted_from_options_and_validation_errors(tmp_path: Path) -> None:
+    secret = "test-only-password"
+    options = AddonOptions(
+        smtp_enabled=True,
+        smtp_host="smtp.example.test",
+        smtp_recipient="recipient@example.test",
+        smtp_username="user",
+        smtp_password=secret,
+    )
+    environment: dict[str, str] = {}
+    apply_environment(options, environment)
+    assert secret not in repr(options)
+    assert secret not in options.model_dump_json()
+    assert environment["AW_SMTP_PASSWORD"] == secret
+
+    path = tmp_path / "options.json"
+    path.write_text(
+        '{"smtp_enabled":true,"smtp_host":"smtp.example.test",'
+        '"smtp_recipient":"recipient@example.test","smtp_password":"test-only-password",'
+        '"smtp_use_tls":false}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError) as invalid:
+        load_options(path)
+    assert secret not in str(invalid.value)
 
 
 def test_addon_migration_is_idempotent_and_preserves_data(tmp_path: Path) -> None:
@@ -117,3 +145,29 @@ def test_packaged_artifact_audit_rejects_private_runtime_member(tmp_path: Path) 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.audit(str(archive_path))
+
+
+def test_packaged_artifact_audit_rejects_case_variant_options_and_large_secrets(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "secret.tar.gz"
+    secret = b'smtp_password: "not-a-real-secret"\n'
+    with tarfile.open(archive_path, "w:gz") as archive:
+        options = tarfile.TarInfo("Options.JSON")
+        options.size = len(secret)
+        archive.addfile(options, io.BytesIO(secret))
+        large = tarfile.TarInfo("config.yaml")
+        large.size = 2 * 1024 * 1024 + 1
+        archive.addfile(large, io.BytesIO(b"x" * large.size))
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "audit_addon_artifact", ROOT / "scripts/audit_addon_artifact.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    errors = module.audit(str(archive_path))
+    assert "secret-bearing configuration file in artifact" in errors
+    assert "serialized secret value in artifact" in errors
+    assert "unexpectedly large artifact member" in errors

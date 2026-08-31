@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import smtplib
+import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Protocol
@@ -10,7 +11,6 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class NotificationMessage:
-    recipient: str
     subject: str
     body: str
 
@@ -46,14 +46,15 @@ class SMTPNotificationSender:
     def send(self, message: NotificationMessage) -> None:
         if not self.host or not self.recipient:
             raise RuntimeError("SMTP notification is not configured")
+        if not self.use_tls:
+            raise RuntimeError("SMTP delivery requires TLS")
         mail = EmailMessage()
         mail["From"] = self.sender
         mail["To"] = self.recipient
         mail["Subject"] = message.subject
         mail.set_content(message.body)
         with smtplib.SMTP(self.host, self.port, timeout=10) as connection:
-            if self.use_tls:
-                connection.starttls()
+            connection.starttls(context=ssl.create_default_context())
             if self.username:
                 connection.login(self.username, self.password or "")
             connection.send_message(mail)

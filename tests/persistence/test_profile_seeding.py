@@ -65,6 +65,24 @@ def test_consolas_seed_upgrades_v1_to_context_hardened_v2(
     assert {rule.term for rule in upgraded.profile.context_rules} >= {"mario", "family", "ds"}
 
 
+def test_seed_v3_repairs_criteria_but_preserves_operational_settings(
+    repository: ProfileRepository,
+) -> None:
+    legacy = consoles_profile().model_copy(
+        update={
+            "seed_version": 2,
+            "keywords_all": ("autor", "tapa dura"),
+            "notification_mode": "matches_or_failure",
+        }
+    )
+    first = repository.seed_system_profile(legacy)
+    upgraded = repository.seed_system_profile(consoles_profile())
+
+    assert upgraded.revision == first.revision + 1
+    assert upgraded.profile.keywords_all == ()
+    assert upgraded.profile.notification_mode == "matches_or_failure"
+
+
 def test_system_profile_cannot_be_deleted_or_change_identity(repository: ProfileRepository) -> None:
     created = repository.seed_system_profile(consoles_profile())
     with pytest.raises(SystemProfileDeleteError):

@@ -34,9 +34,9 @@ def _matches(payload: object, profile_id: str) -> list[dict[str, Any]]:
 class NotificationPlanner:
     """Turn a completed run into at most one logical outbox item."""
 
-    def __init__(self, repository: NotificationRepository, *, recipient: str | None) -> None:
+    def __init__(self, repository: NotificationRepository, *, enabled: bool) -> None:
         self.repository = repository
-        self.recipient = recipient
+        self.enabled = enabled
 
     def plan(
         self,
@@ -46,7 +46,7 @@ class NotificationPlanner:
         previous_snapshot: Any,
     ) -> NotificationOutboxRecord | None:
         mode = profile.profile.notification_mode
-        if mode == "disabled" or not self.recipient:
+        if mode == "disabled" or not self.enabled:
             return None
         now = datetime.now(UTC)
         notification_type = "failure"
@@ -90,7 +90,6 @@ class NotificationPlanner:
             payload: dict[str, object] = {
                 "reason": "run_failed",
                 "error": _sanitize_error(body),
-                "recipient": self.recipient,
             }
             subject = f"Auction Watch: falló {profile.profile.name}"
             notification_type = "failure"
@@ -100,7 +99,6 @@ class NotificationPlanner:
             payload = {
                 "reason": "new_or_changed_matches",
                 "count": len(changed_matches),
-                "recipient": self.recipient,
                 "opportunities": [
                     {
                         "opportunity_key": item.get("opportunity_key"),

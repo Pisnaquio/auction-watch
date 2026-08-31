@@ -179,6 +179,7 @@ class CastellsSource(BaseAuctionSource):
     ) -> tuple[AuctionGroup | None, tuple[AuctionLot, ...], GroupReceipt, tuple[str, ...]]:
         group_id = clean_text(raw.get("RemateId"))
         started = datetime.now(UTC)
+        group: AuctionGroup | None = None
         try:
             if not group_id:
                 raise ValueError("auction lacks RemateId")
@@ -275,7 +276,11 @@ class CastellsSource(BaseAuctionSource):
                 started_at=started,
                 finished_at=datetime.now(UTC),
             )
-            return None, (), receipt, (error,)
+            # Discovery was successful even if this group could not be fetched.
+            # Keeping its identity lets the runner record a failed receipt for the
+            # group and preserve previous inventory instead of rejecting all
+            # otherwise-valid sources as a contract violation.
+            return group, (), receipt, (error,)
 
     def scan(self) -> SourceScanResult:
         with self._request_lock:

@@ -30,6 +30,10 @@ The service exposes `/api/v1/health` and `/api/v1/readiness`. The readiness
 endpoint requires a usable, fully migrated SQLite database at
 `${AW_DATA_DIR}/auction-watch.sqlite3` (default `${AW_DATA_DIR}=/data`).
 
+To diagnose the public adapters without writing SQLite, matching, scheduler or
+email delivery, run `python scripts/diagnose_sources.py`. Its output contains
+only source status, counts, receipt state, and sanitized error types.
+
 ## Docker
 
 ```bash

@@ -146,7 +146,6 @@ def test_outbox_logical_once_retry_backoff_and_fake_sender(tmp_path: Path) -> No
             payload={
                 "subject": "Novedades",
                 "body": "Hay una oportunidad",
-                "recipient": "test@example.test",
             },
             created_at=NOW,
             updated_at=NOW,
@@ -193,7 +192,7 @@ def test_planner_notifies_only_new_matches_or_failures(tmp_path: Path) -> None:
             expected_revision=stored.revision,
         )
         repository = NotificationRepository(db)
-        planner = NotificationPlanner(repository, recipient="test@example.test")
+        planner = NotificationPlanner(repository, enabled=True)
         match = {
             "opportunity_key": encode_opportunity_key("bavastro", "auction", "lot"),
             "score": 4,
@@ -259,5 +258,5 @@ def test_planner_notifies_only_new_matches_or_failures(tmp_path: Path) -> None:
 
 def test_fake_sender_contract_never_needs_network() -> None:
     sender = FakeNotificationSender()
-    sender.send(NotificationMessage("test@example.test", "subject", "body"))
+    sender.send(NotificationMessage("subject", "body"))
     assert len(sender.messages) == 1

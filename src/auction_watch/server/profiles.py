@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from auction_watch.async_ops import NotificationRepository, RunQueueRepository
 from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
 from auction_watch.core.models import SearchProfile
-from auction_watch.persistence.contracts import UserOpportunityState
+from auction_watch.persistence.contracts import NotificationOutboxRecord, UserOpportunityState
 from auction_watch.persistence.operational_repository import (
     OperationalPersistenceError,
     OperationalRepository,
@@ -90,6 +90,12 @@ class OpportunityStateRequest(BaseModel):
         return value
 
 
+class NotificationModeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["disabled", "matches", "matches_or_failure"]
+
+
 def _repositories(request: Request) -> tuple[ProfileRepository, OperationalRepository]:
     profiles = getattr(request.app.state, "profile_repository", None)
     operational = getattr(request.app.state, "operational_repository", None)
@@ -110,6 +116,24 @@ def _notifications(request: Request) -> NotificationRepository:
     if notifications is None:
         raise HTTPException(status_code=503, detail="notification outbox is not ready")
     return cast(NotificationRepository, notifications)
+
+
+def _notification_view(item: Any) -> dict[str, object]:
+    """Expose delivery state without recipient, body, payload or provider errors."""
+
+    return {
+        "dedupe_key": item.dedupe_key,
+        "channel": item.channel,
+        "profile_id": item.profile_id,
+        "run_id": item.run_id,
+        "snapshot_id": item.snapshot_id,
+        "status": item.status,
+        "attempts": item.attempts,
+        "notification_type": item.notification_type,
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+        "next_attempt_at": item.next_attempt_at.isoformat() if item.next_attempt_at else None,
+    }
 
 
 def _profile_view(stored: StoredProfile) -> dict[str, object]:
@@ -263,7 +287,49 @@ def list_profile_notifications(request: Request, profile_id: str) -> list[dict[s
     profiles, _ = _repositories(request)
     if profiles.get(profile_id) is None:
         raise HTTPException(status_code=404, detail="profile not found")
-    return [item.model_dump(mode="json") for item in _notifications(request).recent(profile_id)]
+    return [_notification_view(item) for item in _notifications(request).recent(profile_id)]
+
+
+@router.post("/profiles/{profile_id}/notifications/mode")
+def set_notification_mode(
+    request: Request, profile_id: str, body: NotificationModeRequest
+) -> dict[str, object]:
+    profiles, _ = _repositories(request)
+    stored = profiles.get(profile_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    updated = stored.profile.model_copy(update={"notification_mode": body.mode})
+    try:
+        return _profile_view(profiles.replace(updated, expected_revision=stored.revision))
+    except Exception as exc:
+        _raise_profile_error(exc)
+
+
+@router.post(
+    "/profiles/{profile_id}/notifications/test",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def test_profile_notification(request: Request, profile_id: str) -> dict[str, object]:
+    profiles, _ = _repositories(request)
+    if profiles.get(profile_id) is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    if not getattr(request.app.state, "notification_configured", False):
+        raise HTTPException(status_code=409, detail="SMTP notification is not configured")
+    now = datetime.now(UTC)
+    item = NotificationOutboxRecord(
+        dedupe_key=f"test:{profile_id}:{now.date().isoformat()}",
+        channel="smtp",
+        profile_id=profile_id,
+        notification_type="matches",
+        payload={
+            "subject": "Auction Watch: prueba SMTP",
+            "body": "La configuración SMTP de Auction Watch funciona correctamente.",
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    record, _ = _notifications(request).enqueue(item)
+    return _notification_view(record)
 
 
 @router.post("/profiles", status_code=status.HTTP_201_CREATED)

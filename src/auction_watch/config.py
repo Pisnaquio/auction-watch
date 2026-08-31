@@ -1,10 +1,12 @@
 """Application settings loaded from the environment."""
 
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,13 +29,14 @@ class Settings(BaseSettings):
     smtp_sender: str = "auction-watch@localhost"
     smtp_recipient: str | None = None
     smtp_username: str | None = None
-    smtp_password: str | None = None
+    smtp_password: SecretStr | None = None
     smtp_use_tls: bool = True
 
     model_config = SettingsConfigDict(
         env_prefix="AW_",
         env_file=".env",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     @field_validator("timezone")
@@ -44,6 +47,20 @@ class Settings(BaseSettings):
         except (KeyError, ValueError) as exc:
             raise ValueError("timezone must be a valid IANA timezone") from exc
         return value
+
+    @model_validator(mode="after")
+    def validate_smtp(self) -> Settings:
+        if self.smtp_enabled and (not self.smtp_host or not self.smtp_recipient):
+            raise ValueError("smtp_host and smtp_recipient are required when SMTP is enabled")
+        has_username = bool(self.smtp_username)
+        has_password = bool(self.smtp_password and self.smtp_password.get_secret_value())
+        if self.smtp_enabled and not self.smtp_use_tls:
+            raise ValueError("SMTP delivery requires TLS")
+        if has_username != has_password:
+            raise ValueError("smtp_username and smtp_password must be provided together")
+        if (has_username or has_password) and not self.smtp_use_tls:
+            raise ValueError("SMTP credentials require TLS")
+        return self
 
 
 @lru_cache

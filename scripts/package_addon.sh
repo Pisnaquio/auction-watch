@@ -5,6 +5,11 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output="${1:-$root_dir/dist/auction-watch-addon.tar.gz}"
 mkdir -p "$(dirname "$output")"
 
+if ! git -C "$root_dir" diff --quiet || ! git -C "$root_dir" diff --cached --quiet; then
+  printf '%s\n' 'refusing to package uncommitted files' >&2
+  exit 1
+fi
+
 files=(
   .dockerignore
   CHANGELOG.md
@@ -27,10 +32,6 @@ files=(
   web/tsconfig.json
   web/vite.config.ts
 )
-tar \
-  --exclude='*/__pycache__' \
-  --exclude='*/__pycache__/*' \
-  --exclude='*.pyc' \
-  -czf "$output" -C "$root_dir" "${files[@]}"
+git -C "$root_dir" archive --format=tar HEAD -- "${files[@]}" | gzip -n > "$output"
 python3 "$root_dir/scripts/audit_addon_artifact.py" "$output"
 printf 'add-on package created: %s\n' "$output"
