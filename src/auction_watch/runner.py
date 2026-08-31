@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -37,6 +38,7 @@ from auction_watch.sources.transport import HttpxTransport, Transport
 
 logger = logging.getLogger(__name__)
 LEASE_TTL = timedelta(minutes=5)
+MAX_PARALLEL_SOURCES = 5
 
 
 def _sanitize_error(value: str) -> str:
@@ -208,26 +210,15 @@ class AuctionRunEngine:
         source_ids: tuple[str, ...],
     ) -> RunOutcome:
         results: dict[str, SourceScanResult] = {}
-        transport = self.transport_factory()
         try:
-            for spec, source in zip(
-                self.sources.select(source_ids),
-                self.sources.build(transport, source_ids=source_ids),
-                strict=True,
-            ):
-                logger.info(
-                    "auction_source_started",
-                    extra={"run_id": run.run_id, "source_id": spec.source_id},
-                )
-                try:
-                    scanned = source.scan()
-                except Exception as exc:
-                    scanned = SourceScanResult(
-                        source_id=spec.source_id,
-                        label=spec.label,
-                        discovery_status="failed",
-                        errors=(f"source scan failed ({type(exc).__name__})",),
-                    )
+            specs = self.sources.select(source_ids)
+            with ThreadPoolExecutor(max_workers=min(len(specs), MAX_PARALLEL_SOURCES)) as executor:
+                futures = {
+                    spec.source_id: executor.submit(self._scan_source, run.run_id, spec.source_id)
+                    for spec in specs
+                }
+                for spec in specs:
+                    scanned = futures[spec.source_id].result()
                 contract_error = self._source_contract_error(spec.source_id, scanned)
                 if contract_error is not None:
                     scanned = SourceScanResult(
@@ -305,6 +296,23 @@ class AuctionRunEngine:
             return RunOutcome(run.run_id, status, snapshot_id, content_hash, run_errors)
         except Exception:
             raise
+
+    def _scan_source(self, run_id: str, source_id: str) -> SourceScanResult:
+        """Scan one source in isolation; persistence remains single-threaded."""
+
+        spec = self.sources.select((source_id,))[0]
+        transport = self.transport_factory()
+        logger.info("auction_source_started", extra={"run_id": run_id, "source_id": source_id})
+        try:
+            source = self.sources.build(transport, source_ids=(source_id,))[0]
+            return source.scan()
+        except Exception as exc:
+            return SourceScanResult(
+                source_id=spec.source_id,
+                label=spec.label,
+                discovery_status="failed",
+                errors=(f"source scan failed ({type(exc).__name__})",),
+            )
         finally:
             close = getattr(transport, "close", None)
             if callable(close):

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9
+
+- Consulta las fuentes en paralelo con un transporte aislado por fuente y
+  mantiene las escrituras de SQLite en orden determinista.
+- Resume errores repetidos de lotes de Castells por grupo, sin ocultar la
+  cantidad real en el receipt ni llenar el snapshot con miles de copias.
+
 ## 0.1.8
 
 - Una cobertura fallida de Castells ya no invalida la corrida completa: conserva

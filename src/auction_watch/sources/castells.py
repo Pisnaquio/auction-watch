@@ -45,6 +45,19 @@ def _error_label(exc: Exception) -> str:
     return type(exc).__name__
 
 
+def _summarize_group_errors(group_id: str, errors: list[str]) -> tuple[str, ...]:
+    """Keep receipt counts exact without bloating snapshots with per-lot noise."""
+
+    counts: dict[str, int] = {}
+    for error in errors:
+        label = error.rsplit(": ", 1)[-1]
+        counts[label] = counts.get(label, 0) + 1
+    return tuple(
+        f"Castells group {group_id}: {label} ({count})"
+        for label, count in sorted(counts.items())
+    )
+
+
 def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
     if "GXState" not in document or "RemateImagen" not in document:
         raise ValueError("Castells response lacks GXState auction marker")
@@ -264,7 +277,7 @@ class CastellsSource(BaseAuctionSource):
                 started_at=started,
                 finished_at=datetime.now(UTC),
             )
-            return group, ordered_lots, receipt, tuple(group_errors)
+            return group, ordered_lots, receipt, _summarize_group_errors(group_id, group_errors)
         except Exception as exc:
             error = f"Castells group {group_id or 'unknown'}: {_error_label(exc)}"
             receipt = GroupReceipt(
