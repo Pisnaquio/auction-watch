@@ -47,6 +47,11 @@ class FakeSource(BaseAuctionSource):
         return self.state.result
 
 
+class OtherFakeSource(FakeSource):
+    source_id = "other"
+    label = "Other fake"
+
+
 def group() -> AuctionGroup:
     return AuctionGroup(
         source_id="fake",
@@ -149,6 +154,82 @@ def test_shared_source_is_scanned_once_for_multiple_profiles(tmp_path: Path) -> 
         assert result.status == "completed"
         assert state.calls == 1
         assert OperationalRepository(database).active_matches(("profile-a", "profile-b"))
+    finally:
+        database.dispose()
+
+
+def test_parallel_sources_are_all_persisted_before_snapshot(tmp_path: Path) -> None:
+    """A multi-source run must not build a snapshot from only the last future."""
+
+    fake_state = SourceState(complete_result(lot()))
+    other_group = AuctionGroup(
+        source_id="other",
+        auction_id="other-auction",
+        title="Other auction",
+        url="https://other.test/auction",
+        observed_at=NOW,
+        active=True,
+    )
+    other_lot = AuctionLot(
+        source_id="other",
+        auction_id=other_group.auction_id,
+        lot_id="other-lot",
+        title="Other console",
+        description="A second source",
+        lot_url="https://other.test/lot",
+        auction_url=other_group.url,
+        observed_at=NOW,
+        active=True,
+    )
+    other_state = SourceState(
+        SourceScanResult(
+            source_id="other",
+            label="Other fake",
+            groups=(other_group,),
+            lots=(other_lot,),
+            discovery_status="complete",
+            inventory_authoritative=True,
+            receipts=(
+                GroupReceipt(
+                    group_id=other_group.auction_id,
+                    status="complete",
+                    inventory_authoritative=True,
+                    lot_count=1,
+                    error_count=0,
+                    started_at=NOW,
+                    finished_at=NOW,
+                ),
+            ),
+        )
+    )
+    database = Database.open(tmp_path)
+    upgrade_head(tmp_path, database.engine)
+    profiles = ProfileRepository(database)
+    profiles.create(profile().model_copy(update={"source_ids": ("fake", "other")}))
+    registry = SourceRegistry(
+        (
+            SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, fake_state)),
+            SourceSpec(
+                "other",
+                "Other fake",
+                lambda transport: OtherFakeSource(transport, other_state),
+            ),
+        )
+    )
+    runner = AuctionRunEngine(
+        database,
+        source_registry=registry,
+        transport_factory=lambda: object(),
+        now=lambda: NOW,
+    )
+    try:
+        outcome = runner.run("profile-a", request_id="parallel-sources")
+        assert outcome.status == "completed"
+        assert fake_state.calls == other_state.calls == 1
+        assert len(OperationalRepository(database).active_lots(("fake", "other"))) == 2
+        snapshot = OperationalRepository(database).latest_snapshot()
+        assert snapshot is not None
+        assert {item["source_id"] for item in snapshot.payload_json["sources"]} == {"fake", "other"}
     finally:
         database.dispose()
 

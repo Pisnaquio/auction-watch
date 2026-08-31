@@ -219,23 +219,23 @@ class AuctionRunEngine:
                 }
                 for spec in specs:
                     scanned = futures[spec.source_id].result()
-                contract_error = self._source_contract_error(spec.source_id, scanned)
-                if contract_error is not None:
-                    scanned = SourceScanResult(
-                        source_id=spec.source_id,
-                        label=spec.label,
-                        discovery_status="failed",
-                        inventory_authoritative=False,
-                        errors=(f"source contract violation ({contract_error})",),
+                    contract_error = self._source_contract_error(spec.source_id, scanned)
+                    if contract_error is not None:
+                        scanned = SourceScanResult(
+                            source_id=spec.source_id,
+                            label=spec.label,
+                            discovery_status="failed",
+                            inventory_authoritative=False,
+                            errors=(f"source contract violation ({contract_error})",),
+                        )
+                    results[spec.source_id] = scanned
+                    self._persist_source(
+                        run.run_id, spec.source_id, spec.label, results[spec.source_id]
                     )
-                results[spec.source_id] = scanned
-                self._persist_source(
-                    run.run_id, spec.source_id, spec.label, results[spec.source_id]
-                )
-                logger.info(
-                    "auction_source_finished",
-                    extra={"run_id": run.run_id, "source_id": spec.source_id},
-                )
+                    logger.info(
+                        "auction_source_finished",
+                        extra={"run_id": run.run_id, "source_id": spec.source_id},
+                    )
 
             lots = self.operational.active_lots(source_ids)
             for stored in stored_profiles:
