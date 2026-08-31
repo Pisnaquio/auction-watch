@@ -9,7 +9,7 @@ from typing import cast
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from auction_watch.core.models import ContextRule, PriceFilter, SearchProfile, SearchSchedule
@@ -242,17 +242,22 @@ class ProfileRepository:
                     raise SystemProfileImmutableError(profile.id)
             values = self._profile_values(profile, now)
             values["revision"] = ProfileRow.revision + 1
-            result = cast(
-                CursorResult[tuple[object, ...]],
-                session.execute(
-                    update(ProfileRow)
-                    .where(
-                        ProfileRow.id == profile.id,
-                        ProfileRow.revision == expected_revision,
-                    )
-                    .values(**values)
-                ),
-            )
+            try:
+                result = cast(
+                    CursorResult[tuple[object, ...]],
+                    session.execute(
+                        update(ProfileRow)
+                        .where(
+                            ProfileRow.id == profile.id,
+                            ProfileRow.revision == expected_revision,
+                        )
+                        .values(**values)
+                    ),
+                )
+            except OperationalError as exc:
+                if "locked" in str(exc).lower():
+                    raise ProfileRevisionConflictError(profile.id) from None
+                raise ProfilePersistenceError("profile replace failed") from exc
             if result.rowcount != 1:
                 exists = session.scalar(select(ProfileRow.id).where(ProfileRow.id == profile.id))
                 if exists is None:
@@ -276,15 +281,20 @@ class ProfileRepository:
             current = session.get(ProfileRow, profile_id)
             if current is not None and current.kind == "system":
                 raise SystemProfileDeleteError(profile_id)
-            result = cast(
-                CursorResult[tuple[object, ...]],
-                session.execute(
-                    delete(ProfileRow).where(
-                        ProfileRow.id == profile_id,
-                        ProfileRow.revision == expected_revision,
-                    )
-                ),
-            )
+            try:
+                result = cast(
+                    CursorResult[tuple[object, ...]],
+                    session.execute(
+                        delete(ProfileRow).where(
+                            ProfileRow.id == profile_id,
+                            ProfileRow.revision == expected_revision,
+                        )
+                    ),
+                )
+            except OperationalError as exc:
+                if "locked" in str(exc).lower():
+                    raise ProfileRevisionConflictError(profile_id) from None
+                raise ProfilePersistenceError("profile delete failed") from exc
             if result.rowcount == 1:
                 return
             exists = session.scalar(select(ProfileRow.id).where(ProfileRow.id == profile_id))
