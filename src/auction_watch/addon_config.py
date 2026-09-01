@@ -17,7 +17,7 @@ class AddonOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     timezone: str = "UTC"
-    scheduler_enabled: bool = False
+    scheduler_enabled: bool = True
     worker_poll_seconds: float = Field(default=0.5, gt=0, le=60)
     smtp_enabled: bool = False
     smtp_host: str | None = None

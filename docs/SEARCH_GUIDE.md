@@ -46,6 +46,15 @@ máximo; todavía no ofrece un mínimo editable, por lo que esa limitación debe
 considerarse al revisar resultados. Para una búsqueda urgente usá más horarios
 y notificaciones. Para una búsqueda tranquila, menos frecuencia.
 
+La automatización de cada perfil se controla con un interruptor independiente.
+Al activarla, indicá uno o más horarios `HH:MM` y una zona IANA, por ejemplo
+`America/Montevideo`. La cabecera muestra si el worker y el scheduler global del
+entorno están realmente activos. Una corrida manual `completed` o `partial` con
+snapshot, hecha hasta 15 minutos antes del horario o durante su ventana de
+ejecución, cubre ese slot y evita repetirla. El scheduler sólo recupera un
+horario durante los 15 minutos siguientes: un reinicio varias horas más tarde
+no dispara una corrida inesperada.
+
 ## Qué significa la cobertura
 
 - **complete:** la fuente verificó toda la cobertura prevista. Cero hallazgos

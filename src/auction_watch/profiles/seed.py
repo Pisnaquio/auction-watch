@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from auction_watch.core.models import ContextRule, SearchProfile
+from auction_watch.core.models import ContextRule, SearchProfile, SearchSchedule
 
 CONSOLAS_SEED_KEY = "auction-watch-consolas"
-CONSOLAS_SEED_VERSION = 3
+CONSOLAS_SEED_VERSION = 4
 
 
 def consoles_profile() -> SearchProfile:
@@ -286,7 +286,12 @@ def consoles_profile() -> SearchProfile:
         ),
         source_ids=("bavastro", "castells", "remotes", "todoremates", "prado"),
         minimum_score=0,
-        notification_mode="disabled",
+        notification_mode="matches_or_failure",
+        schedule=SearchSchedule(
+            enabled=True,
+            times=("09:00",),
+            timezone="America/Montevideo",
+        ),
     )
 
 

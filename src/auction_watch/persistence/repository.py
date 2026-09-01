@@ -303,7 +303,12 @@ class ProfileRepository:
             raise ProfileRevisionConflictError(profile_id)
 
     def seed_system_profile(self, profile: SearchProfile) -> StoredProfile:
-        """Create or upgrade one system seed without reactivating a pause."""
+        """Create or upgrade one system seed without reactivating a pause.
+
+        A seed upgrade is an explicit product migration, so its schedule and
+        notification policy are applied once with the new seed version. A
+        regular restart at the same version remains idempotent.
+        """
 
         if profile.kind != "system" or not profile.locked or not profile.seed_key:
             raise SystemProfileImmutableError(profile.id)
@@ -317,8 +322,6 @@ class ProfileRepository:
         upgraded = profile.model_copy(
             update={
                 "enabled": existing.profile.enabled,
-                "notification_mode": existing.profile.notification_mode,
-                "schedule": existing.profile.schedule,
             }
         )
         return self.replace(upgraded, expected_revision=existing.revision)

@@ -35,19 +35,20 @@ def enqueue_due_profiles(
     """Enqueue the current elapsed slot for each enabled, uncovered profile."""
 
     stored = profiles.list()
-    due = due_profiles(stored, queue.last_successful_by_profile(), now)
+    due = due_profiles(stored, queue.last_covered_by_profile(), now)
     by_id = {item.profile.id: item for item in stored}
     enqueued: list[str] = []
     for profile_id in due:
         item: StoredProfile = by_id[profile_id]
-        queue.enqueue(
+        _, created = queue.enqueue(
             idempotency_key=f"scheduled:{profile_id}:{_slot_stamp(item, now)}",
             profile_id=profile_id,
             trigger="scheduled",
             revision=item.revision,
             now=now,
         )
-        enqueued.append(profile_id)
+        if created:
+            enqueued.append(profile_id)
     return tuple(enqueued)
 
 
