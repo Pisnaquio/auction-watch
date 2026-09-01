@@ -40,7 +40,8 @@ def files_to_check() -> list[Path]:
             path
             for path in (ROOT / directory).rglob("*")
             if path.is_file()
-            and path.suffix in {".py", ".pyi", ".ts", ".tsx", ".css", ".yml", ".yaml"}
+            and path.suffix
+            in {".py", ".pyi", ".js", ".mjs", ".ts", ".tsx", ".css", ".yml", ".yaml"}
         )
     return paths
 

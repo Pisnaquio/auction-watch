@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16
+
+- Mantiene el texto crudo de los criterios mientras se edita, permitiendo
+  espacios, frases y comas finales sin que el campo reescriba cada tecla.
+- Convierte los valores separados por comas recién al validar o guardar y
+  agrega pruebas del flujo con frases compuestas, acentos y separadores vacíos.
+
 ## 0.1.15
 
 - Reemplaza las consultas SQLite por lote durante reconciliación por una

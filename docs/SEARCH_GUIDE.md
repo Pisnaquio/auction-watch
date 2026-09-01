@@ -6,6 +6,10 @@ criterios automáticamente.
 
 ## Los campos principales
 
+Los campos aceptan texto normal. Separá criterios distintos con comas; los
+espacios dentro de cada término o frase se conservan. Por ejemplo,
+`mesa de pool, mesa de ping pong` guarda dos criterios completos.
+
 ### Cualquiera de estos términos
 
 Amplía resultados: alcanza con que aparezca uno. Para una mesa de pool, por

@@ -1,11 +1,12 @@
 {
   "name": "auction-watch-web",
   "private": true,
-  "version": "0.1.15",
+  "version": "0.1.16",
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "dev": "vite",
+    "test": "node --test src/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
