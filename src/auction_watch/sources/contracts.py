@@ -34,6 +34,27 @@ class GroupReceipt(SourceContract):
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+class SkippedGroup(SourceContract):
+    """A discovered group intentionally excluded before fetching its inventory."""
+
+    group_id: str
+    title: str
+    status: Literal["skipped_irrelevant"] = "skipped_irrelevant"
+    reason: Literal["art_title"] = "art_title"
+
+    _group = field_validator("group_id", mode="before")(
+        lambda value: external_id(value, "group_id")
+    )
+
+    @field_validator("title")
+    @classmethod
+    def nonempty_title(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("skipped group title must not be empty")
+        return cleaned
+
+
 class SourceScanResult(SourceContract):
     source_id: str
     label: str
@@ -42,6 +63,7 @@ class SourceScanResult(SourceContract):
     discovery_status: Literal["complete", "partial", "failed"]
     inventory_authoritative: bool = False
     receipts: tuple[GroupReceipt, ...] = ()
+    skipped_groups: tuple[SkippedGroup, ...] = ()
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -50,4 +72,4 @@ class SourceScanResult(SourceContract):
     )
 
 
-__all__ = ["GroupReceipt", "SourceScanResult"]
+__all__ = ["GroupReceipt", "SkippedGroup", "SourceScanResult"]

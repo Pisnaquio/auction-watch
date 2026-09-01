@@ -18,7 +18,7 @@ from auction_watch.persistence import (
 )
 from auction_watch.runner import AuctionRunEngine, due_profiles
 from auction_watch.sources.base import BaseAuctionSource
-from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
+from auction_watch.sources.contracts import GroupReceipt, SkippedGroup, SourceScanResult
 from auction_watch.sources.registry import SourceRegistry, SourceSpec
 
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
@@ -154,6 +154,38 @@ def test_shared_source_is_scanned_once_for_multiple_profiles(tmp_path: Path) -> 
         assert result.status == "completed"
         assert state.calls == 1
         assert OperationalRepository(database).active_matches(("profile-a", "profile-b"))
+    finally:
+        database.dispose()
+
+
+def test_skipped_irrelevant_group_is_auditable_without_fake_receipt(tmp_path: Path) -> None:
+    state = SourceState(
+        SourceScanResult(
+            source_id="fake",
+            label="Fake",
+            discovery_status="complete",
+            inventory_authoritative=True,
+            skipped_groups=(
+                SkippedGroup(group_id="art-1", title="Pinacoteca de prueba"),
+            ),
+        )
+    )
+    database, runner = engine(tmp_path, state, profile())
+    try:
+        outcome = runner.run("profile-a", request_id="skipped-group-snapshot")
+        assert outcome.status == "completed"
+        snapshot = OperationalRepository(database).latest_snapshot()
+        assert snapshot is not None
+        source = snapshot.payload_json["sources"][0]
+        assert source["groups"] == []
+        assert source["skipped_groups"] == [
+            {
+                "group_id": "art-1",
+                "title": "Pinacoteca de prueba",
+                "status": "skipped_irrelevant",
+                "reason": "art_title",
+            }
+        ]
     finally:
         database.dispose()
 
@@ -452,6 +484,27 @@ def test_duplicate_source_identities_fail_closed_before_reconciliation(tmp_path:
                 }
             ),
             "source contract violation (duplicate group receipt)",
+        ),
+        (
+            complete_result(lot()).model_copy(
+                update={
+                    "skipped_groups": (
+                        SkippedGroup(group_id="skipped", title="Arte"),
+                        SkippedGroup(group_id="skipped", title="Arte"),
+                    )
+                }
+            ),
+            "source contract violation (duplicate skipped group)",
+        ),
+        (
+            complete_result(lot()).model_copy(
+                update={
+                    "skipped_groups": (
+                        SkippedGroup(group_id="auction:1", title="Arte"),
+                    )
+                }
+            ),
+            "source contract violation (group cannot be both scanned and skipped)",
         ),
     ),
 )

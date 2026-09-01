@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.13
+
+- Omite antes de paginar los remates de Castells cuyo título identifica de
+  forma inequívoca inventario exclusivamente artístico.
+- Mantiene remates mixtos o ambiguos dentro de la consulta y registra cada
+  descarte como `skipped_irrelevant` en el snapshot, sin receipts ficticios.
+- Conserva el estado `partial` cuando cualquier grupo potencialmente relevante
+  falla, aunque otros grupos hayan sido descartados correctamente.
+
 ## 0.1.12
 
 - Programa el perfil protegido Consolas todos los días a las 09:00 en

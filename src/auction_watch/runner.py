@@ -339,8 +339,8 @@ class AuctionRunEngine:
                 run_id=run_id,
                 source_id=source_id,
                 status=source_status,
-                discovered_count=len(result.groups),
-                processed_count=len(result.receipts),
+                discovered_count=len(result.groups) + len(result.skipped_groups),
+                processed_count=len(result.receipts) + len(result.skipped_groups),
                 failed_count=sum(receipt.status == "failed" for receipt in result.receipts),
                 inventory_authoritative=result.inventory_authoritative,
                 started_at=started,
@@ -380,6 +380,9 @@ class AuctionRunEngine:
         receipt_ids = [receipt.group_id for receipt in result.receipts]
         if len(receipt_ids) != len(set(receipt_ids)):
             return "duplicate group receipt"
+        skipped_ids = [group.group_id for group in result.skipped_groups]
+        if len(skipped_ids) != len(set(skipped_ids)):
+            return "duplicate skipped group"
         identities = [
             (lot.source_id, lot.auction_id, lot.lot_id) for lot in result.lots
         ]
@@ -390,6 +393,8 @@ class AuctionRunEngine:
         if any(lot.source_id != expected_source_id for lot in result.lots):
             return "lot belongs to another source"
         group_id_set = set(group_ids)
+        if group_id_set & set(skipped_ids):
+            return "group cannot be both scanned and skipped"
         # A receipt is required for every discovered group.  A failed receipt is
         # still coverage: it tells reconciliation to retain that group's prior
         # inventory.  Excluding it here wrongly escalates one failed group into
@@ -499,6 +504,10 @@ class AuctionRunEngine:
                     "groups": [
                         receipt.model_dump(mode="json")
                         for receipt in results[source_id].receipts
+                    ],
+                    "skipped_groups": [
+                        group.model_dump(mode="json")
+                        for group in results[source_id].skipped_groups
                     ],
                     "errors": [_sanitize_error(error) for error in results[source_id].errors],
                     "warnings": [
