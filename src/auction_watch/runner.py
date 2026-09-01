@@ -234,6 +234,7 @@ class AuctionRunEngine:
                             inventory_authoritative=False,
                             errors=(f"source contract violation ({contract_error})",),
                         )
+                    scanned = self._stabilize_inventory(scanned)
                     results[spec.source_id] = scanned
                     self._persist_source(
                         run.run_id, spec.source_id, spec.label, results[spec.source_id]
@@ -366,7 +367,65 @@ class AuctionRunEngine:
                 receipt.group_id,
                 lots_by_group.get(receipt.group_id, []),
             )
-        self.operational.reconcile_omitted_groups(run_id, source_id)
+        if result.omission_authoritative is not False:
+            self.operational.reconcile_omitted_groups(run_id, source_id)
+
+    def _stabilize_inventory(self, result: SourceScanResult) -> SourceScanResult:
+        """Quarantine implausible Castells shrinkage before reconciliation.
+
+        Castells exposes active auctions through a volatile page rather than a
+        lifecycle API. A transient empty or structurally incomplete response
+        must not become evidence that previously observed lots disappeared.
+        """
+
+        if result.source_id != "castells" or result.discovery_status == "failed":
+            return result
+        prior_by_group: dict[str, set[str]] = {}
+        for prior_lot in self.operational.active_lots((result.source_id,)):
+            prior_by_group.setdefault(prior_lot.auction_id, set()).add(prior_lot.lot_id)
+        if not prior_by_group:
+            return result
+        current_by_group: dict[str, set[str]] = {}
+        for current_lot in result.lots:
+            current_by_group.setdefault(current_lot.auction_id, set()).add(current_lot.lot_id)
+        active_groups = {group.auction_id for group in result.groups if group.active}
+        observed_groups = {receipt.group_id for receipt in result.receipts}
+        observed_groups.update(group.group_id for group in result.skipped_groups)
+        quarantined = set(prior_by_group) - observed_groups
+        receipts = []
+        for receipt in result.receipts:
+            prior = prior_by_group.get(receipt.group_id, set())
+            current = current_by_group.get(receipt.group_id, set())
+            suspicious_empty = bool(prior) and not current
+            suspicious_drop = len(prior) >= 8 and len(current) * 4 < len(prior)
+            if (
+                receipt.group_id in active_groups
+                and receipt.status == "complete"
+                and receipt.inventory_authoritative
+                and (suspicious_empty or suspicious_drop)
+            ):
+                quarantined.add(receipt.group_id)
+                receipt = receipt.model_copy(
+                    update={
+                        "status": "partial",
+                        "inventory_authoritative": False,
+                        "error_count": receipt.error_count + 1,
+                    }
+                )
+            receipts.append(receipt)
+        if not quarantined:
+            return result
+        count = len(quarantined)
+        error = f"Castells unstable inventory evidence retained ({count} "
+        error += "group)" if count == 1 else "groups)"
+        return result.model_copy(
+            update={
+                "discovery_status": "partial",
+                "inventory_authoritative": False,
+                "receipts": tuple(receipts),
+                "errors": (*result.errors, error),
+            }
+        )
 
     @staticmethod
     def _source_contract_error(
@@ -383,6 +442,18 @@ class AuctionRunEngine:
         skipped_ids = [group.group_id for group in result.skipped_groups]
         if len(skipped_ids) != len(set(skipped_ids)):
             return "duplicate skipped group"
+        diagnostic_keys = [
+            (
+                item.group_id,
+                item.status,
+                item.category,
+                item.path,
+                item.fingerprint,
+            )
+            for item in result.diagnostics
+        ]
+        if len(diagnostic_keys) != len(set(diagnostic_keys)):
+            return "duplicate decoder diagnostic"
         identities = [
             (lot.source_id, lot.auction_id, lot.lot_id) for lot in result.lots
         ]
@@ -395,6 +466,8 @@ class AuctionRunEngine:
         group_id_set = set(group_ids)
         if group_id_set & set(skipped_ids):
             return "group cannot be both scanned and skipped"
+        if any(item.group_id not in group_id_set for item in result.diagnostics):
+            return "decoder diagnostic belongs to an unscanned group"
         # A receipt is required for every discovered group.  A failed receipt is
         # still coverage: it tells reconciliation to retain that group's prior
         # inventory.  Excluding it here wrongly escalates one failed group into
@@ -427,6 +500,8 @@ class AuctionRunEngine:
             )
         ):
             return "source authority conflicts with coverage"
+        if result.omission_authoritative is True and not result.inventory_authoritative:
+            return "omission authority conflicts with source authority"
         return None
 
     @staticmethod
@@ -501,6 +576,11 @@ class AuctionRunEngine:
                     "source_id": source_id,
                     "status": results[source_id].discovery_status,
                     "inventory_authoritative": results[source_id].inventory_authoritative,
+                    "omission_authoritative": (
+                        results[source_id].inventory_authoritative
+                        if results[source_id].omission_authoritative is None
+                        else results[source_id].omission_authoritative
+                    ),
                     "groups": [
                         receipt.model_dump(mode="json")
                         for receipt in results[source_id].receipts
@@ -508,6 +588,10 @@ class AuctionRunEngine:
                     "skipped_groups": [
                         group.model_dump(mode="json")
                         for group in results[source_id].skipped_groups
+                    ],
+                    "diagnostics": [
+                        item.model_dump(mode="json")
+                        for item in results[source_id].diagnostics
                     ],
                     "errors": [_sanitize_error(error) for error in results[source_id].errors],
                     "warnings": [

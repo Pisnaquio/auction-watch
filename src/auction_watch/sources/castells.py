@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import re
@@ -10,6 +11,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import islice
 from threading import Lock
 from time import monotonic
 from typing import Any, Literal
@@ -21,7 +23,12 @@ from auction_watch.core.models import AuctionGroup, AuctionLot
 from auction_watch.core.normalization import contains_term
 from auction_watch.core.validation import external_id
 from auction_watch.sources.base import BaseAuctionSource
-from auction_watch.sources.contracts import GroupReceipt, SkippedGroup, SourceScanResult
+from auction_watch.sources.contracts import (
+    DecoderDiagnostic,
+    GroupReceipt,
+    SkippedGroup,
+    SourceScanResult,
+)
 from auction_watch.sources.parsing import (
     clean_text,
     decimal_value,
@@ -38,7 +45,40 @@ LOT_PAGE_SIZE = 500
 MAX_PAGES = 20
 MAX_WORKERS = 3
 MAX_REQUESTS = 160
-MAX_SCAN_SECONDS = 150.0
+REQUEST_TIMEOUT_SECONDS = 8.0
+MAX_SCAN_SECONDS = 60.0
+MAX_ADAPTIVE_DEPTH = 5
+MAX_ADAPTIVE_NODES = 80
+MAX_ADAPTIVE_KEYS = 24
+MAX_ADAPTIVE_ROWS = 50
+
+LOT_ID_KEYS = ("LoteId", "Loteid", "Id", "id")
+LOT_TITLE_KEYS = (
+    "LoteDescripcion",
+    "Descripcion",
+    "LoteTitulo",
+    "Titulo",
+    "Nombre",
+    "description",
+    "title",
+    "name",
+)
+SEMANTIC_LOT_LIST_KEYS = frozenset(
+    {"data", "rows", "items", "lotes", "lots", "records", "entries"}
+)
+NEXT_KEYS = ("next", "Next", "nextPage")
+SENSITIVE_KEY_FRAGMENTS = (
+    "auth",
+    "cookie",
+    "credential",
+    "email",
+    "password",
+    "recipient",
+    "secret",
+    "smtp",
+    "token",
+    "user",
+)
 
 ART_TITLE_MARKERS = (
     "pinacoteca",
@@ -99,6 +139,11 @@ IssueCategory = Literal[
     "pagination",
     "invalid_lot",
     "request_budget",
+    "html_response",
+    "error_payload",
+    "ambiguous_envelope",
+    "unverified_empty",
+    "lot_shape_drift",
     "structure_drift",
 ]
 
@@ -110,14 +155,39 @@ ISSUE_LABELS: dict[IssueCategory, str] = {
     "pagination": "incomplete pagination",
     "invalid_lot": "invalid lot",
     "request_budget": "request budget exhausted",
+    "html_response": "HTML response instead of JSON",
+    "error_payload": "error payload",
+    "ambiguous_envelope": "ambiguous JSON envelope",
+    "unverified_empty": "unverified empty result",
+    "lot_shape_drift": "lot shape drift",
     "structure_drift": "structure drift",
 }
 
 
 class _CastellsIssue(RuntimeError):
-    def __init__(self, category: IssueCategory) -> None:
+    def __init__(
+        self,
+        category: IssueCategory,
+        diagnostic: DecoderDiagnostic | None = None,
+    ) -> None:
         super().__init__(category)
         self.category = category
+        self.diagnostic = diagnostic
+
+
+@dataclass(frozen=True)
+class _DecodedPage:
+    rows: tuple[Any, ...]
+    next_value: Any = None
+    diagnostic: DecoderDiagnostic | None = None
+
+
+@dataclass(frozen=True)
+class _ListCandidate:
+    path: tuple[str, ...]
+    rows: tuple[Any, ...]
+    next_value: Any = None
+    oversized: bool = False
 
 
 @dataclass(frozen=True)
@@ -125,6 +195,7 @@ class _FetchedLots:
     rows: tuple[Mapping[str, Any], ...]
     invalid_entries: int = 0
     issue: IssueCategory | None = None
+    diagnostics: tuple[DecoderDiagnostic, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,6 +205,7 @@ class _GroupScan:
     receipt: GroupReceipt
     issues: tuple[IssueCategory, ...] = ()
     warnings: tuple[IssueCategory, ...] = ()
+    diagnostics: tuple[DecoderDiagnostic, ...] = ()
 
 
 def _classify_exception(exc: Exception, *, discovery: bool = False) -> IssueCategory:
@@ -247,12 +319,221 @@ def _same_source_url(value: Any, fallback: str) -> str:
     return fallback
 
 
-def _decode_lot_page(payload: Any) -> tuple[tuple[Any, ...], Any]:
+def _safe_key(value: object) -> str:
+    text = str(value)
+    lowered = text.casefold()
+    safe = re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,39}", text) is not None
+    if safe and not any(fragment in lowered for fragment in SENSITIVE_KEY_FRAGMENTS):
+        return text
+    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:8]
+    return f"key_{digest}"
+
+
+def _safe_keys(value: Mapping[Any, Any]) -> tuple[str, ...]:
+    return tuple(
+        sorted({_safe_key(key) for key in islice(value, MAX_ADAPTIVE_KEYS)})
+    )
+
+
+def _path_text(path: tuple[str, ...]) -> str:
+    return "$" + "".join(f".{part}" for part in path)
+
+
+def _next_value(node: Mapping[Any, Any]) -> Any:
+    return next((node[name] for name in NEXT_KEYS if node.get(name)), None)
+
+
+def _list_candidates(payload: Any) -> tuple[_ListCandidate, ...]:
+    candidates: list[_ListCandidate] = []
+    visited = 0
+
+    if isinstance(payload, list):
+        rows = tuple(islice(payload, LOT_PAGE_SIZE + 1))
+        return (_ListCandidate((), rows, oversized=len(rows) > LOT_PAGE_SIZE),)
+
+    def visit(node: Any, path: tuple[str, ...], depth: int) -> None:
+        nonlocal visited
+        if (
+            visited >= MAX_ADAPTIVE_NODES
+            or depth > MAX_ADAPTIVE_DEPTH
+            or not isinstance(node, Mapping)
+        ):
+            return
+        visited += 1
+        entries = sorted(
+            islice(node.items(), MAX_ADAPTIVE_KEYS), key=lambda item: str(item[0])
+        )
+        for raw_key, value in entries:
+            key = _safe_key(raw_key)
+            child_path = (*path, key)
+            if isinstance(value, list):
+                rows = tuple(islice(value, LOT_PAGE_SIZE + 1))
+                candidates.append(
+                    _ListCandidate(
+                        child_path,
+                        rows,
+                        _next_value(node),
+                        len(rows) > LOT_PAGE_SIZE,
+                    )
+                )
+            elif isinstance(value, Mapping):
+                visit(value, child_path, depth + 1)
+
+    visit(payload, (), 0)
+    return tuple(candidates)
+
+
+def _alias_value(item: Mapping[str, Any], aliases: tuple[str, ...]) -> Any:
+    direct = next((item[key] for key in aliases if item.get(key)), None)
+    if direct is not None:
+        return direct
+    folded = {
+        str(key).casefold(): value
+        for key, value in islice(item.items(), MAX_ADAPTIVE_KEYS)
+    }
+    return next((folded[key.casefold()] for key in aliases if folded.get(key.casefold())), "")
+
+
+def _lot_identity(item: Mapping[str, Any]) -> str:
+    return clean_text(_alias_value(item, LOT_ID_KEYS))
+
+
+def _lot_title(item: Mapping[str, Any]) -> str:
+    return clean_text(_alias_value(item, LOT_TITLE_KEYS))
+
+
+def _candidate_confidence(candidate: _ListCandidate) -> Literal["high", "medium", "low"]:
+    if candidate.oversized:
+        return "low"
+    sample = candidate.rows[:MAX_ADAPTIVE_ROWS]
+    if not sample:
+        return "low"
+    mappings = tuple(item for item in sample if isinstance(item, Mapping))
+    if len(mappings) / len(sample) < 0.5:
+        return "low"
+    identities = tuple(_lot_identity(item) for item in mappings)
+    titles = tuple(_lot_title(item) for item in mappings)
+    shaped = sum(
+        bool(identity and title)
+        for identity, title in zip(identities, titles, strict=True)
+    )
+    unique_identities = [identity for identity in identities if identity]
+    if (
+        len(mappings) / len(sample) >= 0.8
+        and shaped / len(mappings) >= 0.8
+        and len(unique_identities) == len(set(unique_identities))
+    ):
+        return "high"
+    if any(identities) or any(titles):
+        return "medium"
+    return "low"
+
+
+def _fingerprint(payload: Any, candidates: tuple[_ListCandidate, ...]) -> str:
+    if isinstance(payload, Mapping):
+        root = f"root=object[{','.join(_safe_keys(payload))}]"
+    elif isinstance(payload, list):
+        root = "root=list"
+    elif isinstance(payload, str):
+        root = "root=string"
+    else:
+        root = f"root={type(payload).__name__}"
+    details: list[str] = []
+    for candidate in candidates[:6]:
+        item_keys: set[str] = set()
+        for item in candidate.rows[:5]:
+            if isinstance(item, Mapping):
+                item_keys.update(_safe_keys(item))
+        details.append(
+            f"{_path_text(candidate.path)}=list[{len(candidate.rows)}]"
+            f"{{{','.join(sorted(item_keys)[:MAX_ADAPTIVE_KEYS])}}}"
+        )
+    value = ";".join((root, *details))
+    return value[:500]
+
+
+def _error_payload(payload: Any, depth: int = 0) -> bool:
+    if depth > 3 or not isinstance(payload, Mapping):
+        return False
+    for raw_key, value in islice(payload.items(), MAX_ADAPTIVE_KEYS):
+        key = str(raw_key).casefold()
+        if (
+            key in {"error", "errors", "exception"}
+            and value is not None
+            and value != ""
+            and value is not False
+        ):
+            return True
+        if key in {"status", "result"} and isinstance(value, str):
+            if value.casefold() in {"error", "failed", "failure"}:
+                return True
+        if (
+            key in {"status", "statuscode"}
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 400
+        ):
+            return True
+        if isinstance(value, Mapping) and _error_payload(value, depth + 1):
+            return True
+    return False
+
+
+def _diagnostic(
+    group_id: str,
+    *,
+    status: Literal["adaptive_recovered", "shadow_only"],
+    category: Literal[
+        "envelope_drift",
+        "html_response",
+        "error_payload",
+        "ambiguous_envelope",
+        "unverified_empty",
+        "lot_shape_drift",
+        "structure_drift",
+    ],
+    confidence: Literal["high", "medium", "low"],
+    payload: Any,
+    candidates: tuple[_ListCandidate, ...] = (),
+    path: tuple[str, ...] | None = None,
+) -> DecoderDiagnostic:
+    return DecoderDiagnostic(
+        group_id=group_id,
+        status=status,
+        category=category,
+        confidence=confidence,
+        path=_path_text(path) if path is not None else None,
+        fingerprint=_fingerprint(payload, candidates),
+    )
+
+
+def _decode_lot_page(payload: Any, group_id: str) -> _DecodedPage:
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
         except json.JSONDecodeError as exc:
-            raise _CastellsIssue("structure_drift") from exc
+            category: IssueCategory = (
+                "html_response" if payload.lstrip().startswith("<") else "structure_drift"
+            )
+            diagnostic = _diagnostic(
+                group_id,
+                status="shadow_only",
+                category="html_response" if category == "html_response" else "structure_drift",
+                confidence="low",
+                payload=payload,
+            )
+            raise _CastellsIssue(category, diagnostic) from exc
+    if _error_payload(payload):
+        candidates = _list_candidates(payload)
+        diagnostic = _diagnostic(
+            group_id,
+            status="shadow_only",
+            category="error_payload",
+            confidence="high",
+            payload=payload,
+            candidates=candidates,
+        )
+        raise _CastellsIssue("error_payload", diagnostic)
     node = payload
     for _depth in range(3):
         if not isinstance(node, Mapping):
@@ -260,11 +541,7 @@ def _decode_lot_page(payload: Any) -> tuple[tuple[Any, ...], Any]:
         for key in ("data", "Data", "rows", "Rows"):
             rows = node.get(key)
             if isinstance(rows, list):
-                next_value = next(
-                    (node[name] for name in ("next", "Next", "nextPage") if node.get(name)),
-                    None,
-                )
-                return tuple(rows), next_value
+                return _DecodedPage(tuple(rows), _next_value(node))
         nested = next(
             (
                 node[name]
@@ -276,7 +553,104 @@ def _decode_lot_page(payload: Any) -> tuple[tuple[Any, ...], Any]:
         if nested is None:
             break
         node = nested
-    raise _CastellsIssue("structure_drift")
+
+    candidates = _list_candidates(payload)
+    high = tuple(
+        candidate for candidate in candidates if _candidate_confidence(candidate) == "high"
+    )
+    if len(high) == 1:
+        candidate = high[0]
+        return _DecodedPage(
+            candidate.rows,
+            candidate.next_value,
+            _diagnostic(
+                group_id,
+                status="adaptive_recovered",
+                category="envelope_drift",
+                confidence="high",
+                payload=payload,
+                candidates=candidates,
+                path=candidate.path,
+            ),
+        )
+    if len(high) > 1:
+        diagnostic = _diagnostic(
+            group_id,
+            status="shadow_only",
+            category="ambiguous_envelope",
+            confidence="medium",
+            payload=payload,
+            candidates=candidates,
+        )
+        raise _CastellsIssue("ambiguous_envelope", diagnostic)
+
+    empty = tuple(candidate for candidate in candidates if not candidate.rows)
+    if len(candidates) == 1 and len(empty) == 1:
+        candidate = empty[0]
+        terminal = candidate.path[-1].casefold() if candidate.path else ""
+        if terminal in SEMANTIC_LOT_LIST_KEYS:
+            return _DecodedPage(
+                (),
+                candidate.next_value,
+                _diagnostic(
+                    group_id,
+                    status="adaptive_recovered",
+                    category="envelope_drift",
+                    confidence="high",
+                    payload=payload,
+                    candidates=candidates,
+                    path=candidate.path,
+                ),
+            )
+        diagnostic = _diagnostic(
+            group_id,
+            status="shadow_only",
+            category="unverified_empty",
+            confidence="low",
+            payload=payload,
+            candidates=candidates,
+            path=candidate.path,
+        )
+        raise _CastellsIssue("unverified_empty", diagnostic)
+
+    medium = tuple(
+        candidate for candidate in candidates if _candidate_confidence(candidate) == "medium"
+    )
+    if len(medium) == 1 and len(candidates) == 1:
+        candidate = medium[0]
+        diagnostic = _diagnostic(
+            group_id,
+            status="shadow_only",
+            category="lot_shape_drift",
+            confidence="medium",
+            payload=payload,
+            candidates=candidates,
+            path=candidate.path,
+        )
+        raise _CastellsIssue("lot_shape_drift", diagnostic)
+    if len(candidates) > 1:
+        diagnostic = _diagnostic(
+            group_id,
+            status="shadow_only",
+            category="ambiguous_envelope",
+            confidence="low",
+            payload=payload,
+            candidates=candidates,
+        )
+        raise _CastellsIssue("ambiguous_envelope", diagnostic)
+    diagnostic = _diagnostic(
+        group_id,
+        status="shadow_only",
+        category="lot_shape_drift" if candidates else "structure_drift",
+        confidence="low",
+        payload=payload,
+        candidates=candidates,
+        path=candidates[0].path if len(candidates) == 1 else None,
+    )
+    raise _CastellsIssue(
+        "lot_shape_drift" if candidates else "structure_drift",
+        diagnostic,
+    )
 
 
 def _pagination_url(current_url: str, next_value: Any) -> str:
@@ -293,12 +667,7 @@ def _pagination_url(current_url: str, next_value: Any) -> str:
 def _lot_cursor(item: Any) -> str:
     if not isinstance(item, Mapping):
         return ""
-    raw = clean_text(
-        item.get("LoteId")
-        or item.get("Loteid")
-        or item.get("Id")
-        or item.get("id")
-    )
+    raw = _lot_identity(item)
     return raw.rsplit(":", 1)[-1] if raw else ""
 
 
@@ -311,7 +680,7 @@ class CastellsSource(BaseAuctionSource):
         self,
         transport: Transport,
         *,
-        timeout: float | None = None,
+        timeout: float | None = REQUEST_TIMEOUT_SECONDS,
         max_workers: int = MAX_WORKERS,
         max_requests: int = MAX_REQUESTS,
         deadline_seconds: float = MAX_SCAN_SECONDS,
@@ -373,21 +742,33 @@ class CastellsSource(BaseAuctionSource):
         }
         rows: list[Mapping[str, Any]] = []
         invalid_entries = 0
+        diagnostics: list[DecoderDiagnostic] = []
         request_url = f"{LOTS_URL}?{urlencode(params)}"
         seen_urls: set[str] = set()
         seen_cursors: set[str] = set()
         for _page in range(self.max_pages):
             if request_url in seen_urls:
-                return _FetchedLots(tuple(rows), invalid_entries, "pagination")
+                return _FetchedLots(
+                    tuple(rows), invalid_entries, "pagination", tuple(diagnostics)
+                )
             seen_urls.add(request_url)
             try:
                 payload = self._get(request_url)
-                page_rows, next_value = _decode_lot_page(payload)
+                decoded = _decode_lot_page(payload, group.auction_id)
+                page_rows = decoded.rows
+                next_value = decoded.next_value
+                if decoded.diagnostic is not None:
+                    diagnostics.append(decoded.diagnostic)
             except Exception as exc:
                 category = _classify_exception(exc)
+                diagnostic = exc.diagnostic if isinstance(exc, _CastellsIssue) else None
+                if diagnostic is not None:
+                    diagnostics.append(diagnostic)
                 if rows:
-                    return _FetchedLots(tuple(rows), invalid_entries, category)
-                raise _CastellsIssue(category) from exc
+                    return _FetchedLots(
+                        tuple(rows), invalid_entries, category, tuple(diagnostics)
+                    )
+                raise _CastellsIssue(category, diagnostic) from exc
             mappings = tuple(item for item in page_rows if isinstance(item, Mapping))
             invalid_entries += len(page_rows) - len(mappings)
             rows.extend(mappings)
@@ -395,17 +776,25 @@ class CastellsSource(BaseAuctionSource):
                 try:
                     request_url = _pagination_url(request_url, next_value)
                 except _CastellsIssue:
-                    return _FetchedLots(tuple(rows), invalid_entries, "pagination")
+                    return _FetchedLots(
+                        tuple(rows), invalid_entries, "pagination", tuple(diagnostics)
+                    )
                 continue
             if len(page_rows) < self.page_size:
-                return _FetchedLots(tuple(rows), invalid_entries)
+                return _FetchedLots(
+                    tuple(rows), invalid_entries, diagnostics=tuple(diagnostics)
+                )
             cursor = _lot_cursor(page_rows[-1] if page_rows else None)
             if not cursor or cursor in seen_cursors:
-                return _FetchedLots(tuple(rows), invalid_entries, "pagination")
+                return _FetchedLots(
+                    tuple(rows), invalid_entries, "pagination", tuple(diagnostics)
+                )
             seen_cursors.add(cursor)
             params["Lastloteid"] = cursor
             request_url = f"{LOTS_URL}?{urlencode(params)}"
-        return _FetchedLots(tuple(rows), invalid_entries, "pagination")
+        return _FetchedLots(
+            tuple(rows), invalid_entries, "pagination", tuple(diagnostics)
+        )
 
     def _scan_group(self, raw: Mapping[str, Any]) -> _GroupScan:
         group_id = external_id(clean_text(raw.get("RemateId")), "auction_id")
@@ -442,19 +831,8 @@ class CastellsSource(BaseAuctionSource):
             conflicted_lot_ids: set[str] = set()
             for item in fetched.rows:
                 try:
-                    lot_id = clean_text(
-                        item.get("LoteId")
-                        or item.get("Loteid")
-                        or item.get("Id")
-                        or item.get("id")
-                    )
-                    title = clean_text(
-                        item.get("LoteDescripcion")
-                        or item.get("Descripcion")
-                        or item.get("LoteTitulo")
-                        or item.get("Titulo")
-                        or item.get("Nombre")
-                    )
+                    lot_id = _lot_identity(item)
+                    title = _lot_title(item)
                     if not lot_id or not title:
                         raise ValueError("lot lacks stable identity")
                     canonical_lot_url = urljoin(
@@ -525,9 +903,15 @@ class CastellsSource(BaseAuctionSource):
                 receipt,
                 tuple(issues),
                 tuple(warnings),
+                fetched.diagnostics,
             )
         except Exception as exc:
             category = _classify_exception(exc)
+            diagnostics = (
+                (exc.diagnostic,)
+                if isinstance(exc, _CastellsIssue) and exc.diagnostic is not None
+                else ()
+            )
             receipt = GroupReceipt(
                 group_id=group_id,
                 status="failed",
@@ -537,7 +921,7 @@ class CastellsSource(BaseAuctionSource):
                 started_at=started,
                 finished_at=datetime.now(UTC),
             )
-            return _GroupScan(group, (), receipt, (category,))
+            return _GroupScan(group, (), receipt, (category,), diagnostics=diagnostics)
 
     def scan(self) -> SourceScanResult:
         with self._request_lock:
@@ -572,6 +956,7 @@ class CastellsSource(BaseAuctionSource):
         groups: list[AuctionGroup] = []
         lots: list[AuctionLot] = []
         receipts: list[GroupReceipt] = []
+        diagnostics: list[DecoderDiagnostic] = []
         issue_groups: dict[IssueCategory, set[str]] = {
             category: set() for category in ISSUE_LABELS
         }
@@ -594,12 +979,23 @@ class CastellsSource(BaseAuctionSource):
                 groups.append(scanned.group)
                 lots.extend(scanned.lots)
                 receipts.append(receipt)
+                diagnostics.extend(scanned.diagnostics)
                 for category in set(issues):
                     issue_groups[category].add(receipt.group_id)
                 for category in set(scanned.warnings):
                     warning_groups[category].add(receipt.group_id)
         errors = _aggregate_issues(issue_groups, discovery_counts=discovery_issues)
         warnings = _aggregate_issues(warning_groups)
+        unique_diagnostics = {
+            (
+                item.group_id,
+                item.status,
+                item.category,
+                item.path,
+                item.fingerprint,
+            ): item
+            for item in diagnostics
+        }
         authoritative = not errors and all(
             receipt.status == "complete" and receipt.inventory_authoritative
             for receipt in receipts
@@ -611,8 +1007,13 @@ class CastellsSource(BaseAuctionSource):
             lots=tuple(lots),
             discovery_status="complete" if authoritative else "partial",
             inventory_authoritative=authoritative,
+            # GXState is not an authoritative auction-lifecycle feed. A group
+            # can disappear from the home page temporarily, so omission alone
+            # must never deactivate its previously healthy inventory.
+            omission_authoritative=False,
             receipts=tuple(receipts),
             skipped_groups=tuple(skipped_groups),
+            diagnostics=tuple(unique_diagnostics.values()),
             errors=errors,
             warnings=warnings,
         )

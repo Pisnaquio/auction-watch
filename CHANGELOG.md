@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.14
+
+- Agrega un decoder estructural acotado para recuperar automáticamente
+  envelopes nuevos de Castells sólo cuando existe un único candidato con IDs y
+  títulos estables.
+- Separa HTML, payloads de error, envelopes ambiguos, vacíos no verificables y
+  cambios en la forma de los lotes en causas de drift específicas.
+- Publica fingerprints exclusivamente estructurales y mantiene los casos de
+  confianza media o baja en modo sombra, sin inventario, mail ni autoridad.
+- Conserva paginación, límites de profundidad/nodos y validación fail-closed.
+- Evita que una omisión transitoria, un grupo vacío o una caída superior al
+  75% desactive el último inventario sano de Castells; esos casos quedan
+  `partial` y diagnosticados.
+- Limita Castells a 8 segundos por solicitud y 60 segundos por corrida, sin
+  agregar consultas de recuperación en segundo plano.
+
 ## 0.1.13
 
 - Omite antes de paginar los remates de Castells cuyo título identifica de

@@ -57,6 +57,12 @@ GXState plus lot response structure; Remotes proves an RSS channel and item
 structure. Source adapters use injected transports and never perform matching,
 persist rows, send mail, or write runtime files.
 
+`omission_authoritative` separates a complete group receipt from proof that a
+group no longer exists. Castells sets it to false because GXState omissions are
+volatile. The runner also quarantines empty or greater-than-75% inventory drops
+for active Castells groups, preserving the prior lifecycle and reporting a
+partial source instead of destructive reconciliation.
+
 Persistence contracts cover runs, source results, coverage, lifecycle,
 profile matches, user decisions, snapshots, and notification outbox records.
 They validate the same identities and UTC timestamps before SQLAlchemy rows are
