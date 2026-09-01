@@ -56,6 +56,12 @@ type Snapshot = {
       inventory_authoritative: boolean;
       errors: string[];
       warnings?: string[];
+      skipped_groups?: Array<{
+        group_id: string;
+        title: string;
+        status: "skipped_irrelevant";
+        reason: "art_title";
+      }>;
     }>;
     profiles: Array<{ profile_id: string; matches: Match[] }>;
     user_states: Array<{ opportunity_key?: string; state: string; version: number }>;
@@ -717,6 +723,8 @@ function App() {
     snapshot?.payload.sources.filter(
       (source) => source.status !== "complete" || !source.inventory_authoritative,
     ) ?? [];
+  const skippedSources =
+    snapshot?.payload.sources.filter((source) => (source.skipped_groups?.length ?? 0) > 0) ?? [];
 
   return (
     <div className="app-shell">
@@ -831,6 +839,20 @@ function App() {
                     <small key={source.source_id}>
                       {sourceNames[source.source_id] ?? source.source_id}: {source.status}
                       {source.errors.length > 0 ? ` — ${source.errors.join("; ")}` : ""}
+                    </small>
+                  ))}
+                </div>
+              )}
+              {snapshot && skippedSources.length > 0 && (
+                <div className="coverage-warning">
+                  <strong>Remates descartados por título</strong>
+                  <span>
+                    Se omitieron únicamente grupos inequívocamente artísticos antes de consultar
+                    sus lotes.
+                  </span>
+                  {skippedSources.map((source) => (
+                    <small key={source.source_id}>
+                      {sourceNames[source.source_id] ?? source.source_id}: {source.skipped_groups?.length ?? 0}
                     </small>
                   ))}
                 </div>

@@ -7,7 +7,7 @@ from auction_watch.sources.adapters import (
     RemotesSource,
     TodoRematesSource,
 )
-from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
+from auction_watch.sources.contracts import GroupReceipt, SkippedGroup, SourceScanResult
 from auction_watch.sources.registry import DEFAULT_SOURCE_REGISTRY, SourceRegistry, SourceSpec
 
 __all__ = [
@@ -20,5 +20,6 @@ __all__ = [
     "SourceRegistry",
     "SourceScanResult",
     "SourceSpec",
+    "SkippedGroup",
     "TodoRematesSource",
 ]

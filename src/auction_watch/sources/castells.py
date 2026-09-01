@@ -18,9 +18,10 @@ from urllib.parse import urlencode, urljoin, urlsplit
 import httpx
 
 from auction_watch.core.models import AuctionGroup, AuctionLot
+from auction_watch.core.normalization import contains_term
 from auction_watch.core.validation import external_id
 from auction_watch.sources.base import BaseAuctionSource
-from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
+from auction_watch.sources.contracts import GroupReceipt, SkippedGroup, SourceScanResult
 from auction_watch.sources.parsing import (
     clean_text,
     decimal_value,
@@ -38,6 +39,57 @@ MAX_PAGES = 20
 MAX_WORKERS = 3
 MAX_REQUESTS = 160
 MAX_SCAN_SECONDS = 150.0
+
+ART_TITLE_MARKERS = (
+    "pinacoteca",
+    "pintura",
+    "pinturas",
+    "arte",
+    "obra de arte",
+    "obras de arte",
+    "escultura",
+    "esculturas",
+    "acuarela",
+    "acuarelas",
+    "grabado",
+    "grabados",
+    "dibujo",
+    "dibujos",
+    "litografia",
+    "litografias",
+)
+ART_TITLE_MIXED_MARKERS = (
+    "antiguedad",
+    "antiguedades",
+    "mueble",
+    "muebles",
+    "joya",
+    "joyas",
+    "reloj",
+    "relojes",
+    "juguete",
+    "juguetes",
+    "coleccionable",
+    "coleccionables",
+    "libro",
+    "libros",
+    "disco",
+    "discos",
+    "consola",
+    "consolas",
+    "videojuego",
+    "videojuegos",
+    "electronica",
+    "vehiculo",
+    "vehiculos",
+    "maquinaria",
+    "herramienta",
+    "herramientas",
+    "bazar",
+    "hogar",
+    "varios",
+    "general",
+)
 
 IssueCategory = Literal[
     "http_error",
@@ -125,6 +177,14 @@ def _aggregate_issues(
                 f"{'record' if discovery_count == 1 else 'records'})"
             )
     return tuple(summaries)
+
+
+def _irrelevant_art_title(title: str) -> bool:
+    """Classify only clearly art-only auction titles as out of scope."""
+
+    if not title or not any(contains_term(title, marker) for marker in ART_TITLE_MARKERS):
+        return False
+    return not any(contains_term(title, marker) for marker in ART_TITLE_MIXED_MARKERS)
 
 
 def parse_gxstate(document: str) -> tuple[Mapping[str, Any], ...]:
@@ -499,6 +559,16 @@ class CastellsSource(BaseAuctionSource):
                 errors=(f"Castells {ISSUE_LABELS[category]} (discovery)",),
             )
 
+        relevant_auctions: list[Mapping[str, Any]] = []
+        skipped_groups: list[SkippedGroup] = []
+        for raw in auctions:
+            group_id = external_id(clean_text(raw.get("RemateId")), "auction_id")
+            title = clean_text(raw.get("RemateNombre"))
+            if group_id not in conflicted_groups and _irrelevant_art_title(title):
+                skipped_groups.append(SkippedGroup(group_id=group_id, title=title))
+            else:
+                relevant_auctions.append(raw)
+
         groups: list[AuctionGroup] = []
         lots: list[AuctionLot] = []
         receipts: list[GroupReceipt] = []
@@ -509,7 +579,7 @@ class CastellsSource(BaseAuctionSource):
             category: set() for category in ISSUE_LABELS
         }
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            for scanned in executor.map(self._scan_group, auctions):
+            for scanned in executor.map(self._scan_group, relevant_auctions):
                 receipt = scanned.receipt
                 issues = list(scanned.issues)
                 if receipt.group_id in conflicted_groups:
@@ -542,6 +612,7 @@ class CastellsSource(BaseAuctionSource):
             discovery_status="complete" if authoritative else "partial",
             inventory_authoritative=authoritative,
             receipts=tuple(receipts),
+            skipped_groups=tuple(skipped_groups),
             errors=errors,
             warnings=warnings,
         )

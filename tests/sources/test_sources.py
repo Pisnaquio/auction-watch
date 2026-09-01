@@ -143,6 +143,90 @@ def test_castells_requires_html_gxstate_and_reads_lots_endpoint() -> None:
     assert str(result.lots[0].price_value) == "1234.50"
 
 
+def test_castells_skips_only_unambiguous_art_auctions_before_lot_requests() -> None:
+    records = (
+        (1, "Pinacoteca Castells"),
+        (2, "Pinturas y esculturas uruguayas"),
+        (3, "Colección particular"),
+        (4, "Arte, consolas y varios"),
+        (5, "Remate general"),
+        (6, "Litografías y dibujos"),
+    )
+    document = "<html><script>GXState=" + "".join(
+        json.dumps(
+            {
+                "RemateImagen": "/img.jpg",
+                "RemateId": group_id,
+                "RemateNombre": title,
+                "RemateTipo": 1,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        for group_id, title in records
+    ) + ";</script></html>"
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=document)
+        group_id = parse_qs(urlsplit(url).query)["Remateid"][0]
+        assert group_id in {"3", "4", "5"}
+        return FakeResponse(payload={"data": []})
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport).scan()
+
+    assert result.discovery_status == "complete"
+    assert result.inventory_authoritative is True
+    assert [group.auction_id for group in result.groups] == ["3", "4", "5"]
+    assert [receipt.group_id for receipt in result.receipts] == ["3", "4", "5"]
+    assert [group.model_dump() for group in result.skipped_groups] == [
+        {
+            "group_id": "1",
+            "title": "Pinacoteca Castells",
+            "status": "skipped_irrelevant",
+            "reason": "art_title",
+        },
+        {
+            "group_id": "2",
+            "title": "Pinturas y esculturas uruguayas",
+            "status": "skipped_irrelevant",
+            "reason": "art_title",
+        },
+        {
+            "group_id": "6",
+            "title": "Litografías y dibujos",
+            "status": "skipped_irrelevant",
+            "reason": "art_title",
+        },
+    ]
+    assert len(transport.calls) == 4
+
+
+def test_castells_art_skip_never_hides_failure_in_relevant_group() -> None:
+    document = (
+        '<html><script>GXState={"RemateImagen":"/img.jpg","RemateId":1,'
+        '"RemateNombre":"Pinacoteca histórica","RemateTipo":1}'
+        '{"RemateImagen":"/img.jpg","RemateId":2,'
+        '"RemateNombre":"Remate de consolas","RemateTipo":1};</script></html>'
+    )
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=document)
+        assert parse_qs(urlsplit(url).query)["Remateid"] == ["2"]
+        return FakeResponse(payload={"unexpected": []})
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.inventory_authoritative is False
+    assert [group.group_id for group in result.skipped_groups] == ["1"]
+    assert [receipt.group_id for receipt in result.receipts] == ["2"]
+    assert result.receipts[0].status == "failed"
+    assert result.errors == ("Castells structure drift (1 group)",)
+
+
 def test_castells_deduplicates_repeated_discovery_and_identical_lots() -> None:
     record = (
         '{"RemateImagen":"/img.jpg","RemateId":77,'

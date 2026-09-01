@@ -39,6 +39,14 @@ Conviene comenzar con varias fuentes activas porque cada rematador publica
 inventario distinto. Una fuente parcial no oculta los resultados sanos de las
 demás.
 
+En Castells, los remates cuyo título es inequívocamente de pinacoteca, pinturas,
+arte, esculturas, acuarelas, grabados, dibujos o litografías se descartan antes
+de consultar lotes.
+La decisión queda visible como `skipped_irrelevant`. Títulos mixtos —por
+ejemplo, arte junto con consolas, muebles, libros o “varios”— y títulos ambiguos
+como “Colección particular” se siguen consultando. Un descarte artístico nunca
+convierte en completa una corrida que tenga fallos en grupos relevantes.
+
 ### Categorías, precio, urgencia y frecuencia
 
 Las categorías y el precio máximo reducen ruido. El editor actual aplica un
