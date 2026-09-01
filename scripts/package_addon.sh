@@ -18,6 +18,7 @@ files=(
   SECURITY.md
   build.yaml
   config.yaml
+  docs/SEARCH_GUIDE.md
   docs/addon.md
   pyproject.toml
   repository.yaml

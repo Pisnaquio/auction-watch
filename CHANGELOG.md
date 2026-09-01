@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.11
+
+- Mejora la cobertura de Castells con paginación acotada, menor concurrencia,
+  conservación de páginas válidas y causas agregadas por categoría.
+- Separa advertencias opcionales de precio/moneda de los fallos reales de
+  cobertura y mantiene los resultados sanos ante grupos parciales.
+- Agrega la guía “Cómo buscar mejor” en la interfaz y en Markdown, junto con
+  advertencias no destructivas antes de guardar criterios demasiado cerrados.
+
 ## 0.1.10
 
 - Corrige la persistencia secuencial de todas las fuentes después de

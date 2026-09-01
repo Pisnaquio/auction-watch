@@ -43,6 +43,7 @@ class SourceScanResult(SourceContract):
     inventory_authoritative: bool = False
     receipts: tuple[GroupReceipt, ...] = ()
     errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
     _source = field_validator("source_id", mode="before")(
         lambda value: canonical_slug(value, "source_id")
