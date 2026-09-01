@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
 from auction_watch.core.models import AuctionLot, MatchResult, PriceFilter
 from auction_watch.profiles.models import SearchProfile
+from auction_watch.sources.contracts import DecoderDiagnostic
 
 OBSERVED_AT = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
 
@@ -92,6 +93,28 @@ def test_ordered_fields_reject_sets() -> None:
         make_profile(source_ids={"remates"})
     with pytest.raises(ValidationError):
         make_profile(schedule={"times": {"09:15"}})
+
+
+@pytest.mark.parametrize(
+    "fingerprint",
+    (
+        "root=object[token]",
+        "root=object[recipient]",
+        "https://example.test/payload",
+        "root=object[user@example.test]",
+    ),
+)
+def test_decoder_diagnostic_rejects_secret_bearing_or_non_structural_text(
+    fingerprint: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        DecoderDiagnostic(
+            group_id="group-1",
+            status="shadow_only",
+            category="structure_drift",
+            confidence="low",
+            fingerprint=fingerprint,
+        )
 
 
 @pytest.mark.parametrize(

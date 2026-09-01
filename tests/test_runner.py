@@ -18,7 +18,12 @@ from auction_watch.persistence import (
 )
 from auction_watch.runner import AuctionRunEngine, due_profiles
 from auction_watch.sources.base import BaseAuctionSource
-from auction_watch.sources.contracts import GroupReceipt, SkippedGroup, SourceScanResult
+from auction_watch.sources.contracts import (
+    DecoderDiagnostic,
+    GroupReceipt,
+    SkippedGroup,
+    SourceScanResult,
+)
 from auction_watch.sources.registry import SourceRegistry, SourceSpec
 
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
@@ -50,6 +55,11 @@ class FakeSource(BaseAuctionSource):
 class OtherFakeSource(FakeSource):
     source_id = "other"
     label = "Other fake"
+
+
+class CastellsFakeSource(FakeSource):
+    source_id = "castells"
+    label = "Castells"
 
 
 def group() -> AuctionGroup:
@@ -99,6 +109,43 @@ def complete_result(*lots: AuctionLot) -> SourceScanResult:
     )
 
 
+def castells_group() -> AuctionGroup:
+    return group().model_copy(update={"source_id": "castells"})
+
+
+def castells_lot(lot_id: str = "lot:1") -> AuctionLot:
+    return lot(lot_id).model_copy(update={"source_id": "castells"})
+
+
+def castells_complete_result(*lots: AuctionLot, include_group: bool = True) -> SourceScanResult:
+    groups = (castells_group(),) if include_group else ()
+    receipts = (
+        (
+            GroupReceipt(
+                group_id="auction:1",
+                status="complete",
+                inventory_authoritative=True,
+                lot_count=len(lots),
+                error_count=0,
+                started_at=NOW,
+                finished_at=NOW,
+            ),
+        )
+        if include_group
+        else ()
+    )
+    return SourceScanResult(
+        source_id="castells",
+        label="Castells",
+        groups=groups,
+        lots=tuple(lots),
+        discovery_status="complete",
+        inventory_authoritative=True,
+        omission_authoritative=False,
+        receipts=receipts,
+    )
+
+
 def profile(profile_id: str = "profile-a") -> SearchProfile:
     return SearchProfile(
         id=profile_id,
@@ -118,6 +165,36 @@ def engine(
         profiles_repo.create(item)
     registry = SourceRegistry(
         (SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, state)),)
+    )
+    return database, AuctionRunEngine(
+        database,
+        source_registry=registry,
+        transport_factory=lambda: object(),
+        now=lambda: NOW,
+    )
+
+
+def castells_engine(
+    tmp_path: Path, state: SourceState
+) -> tuple[Database, AuctionRunEngine]:
+    database = Database.open(tmp_path)
+    upgrade_head(tmp_path, database.engine)
+    ProfileRepository(database).create(
+        SearchProfile(
+            id="consolas",
+            name="Consolas",
+            source_ids=["castells"],
+            keywords_any=["console"],
+        )
+    )
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                "castells",
+                "Castells",
+                lambda transport: CastellsFakeSource(transport, state),
+            ),
+        )
     )
     return database, AuctionRunEngine(
         database,
@@ -185,6 +262,33 @@ def test_skipped_irrelevant_group_is_auditable_without_fake_receipt(tmp_path: Pa
                 "status": "skipped_irrelevant",
                 "reason": "art_title",
             }
+        ]
+    finally:
+        database.dispose()
+
+
+def test_decoder_diagnostic_is_published_as_sanitized_snapshot_evidence(
+    tmp_path: Path,
+) -> None:
+    diagnostic = DecoderDiagnostic(
+        group_id="auction:1",
+        status="adaptive_recovered",
+        category="envelope_drift",
+        confidence="high",
+        path="$.response.items",
+        fingerprint="root=object[response];$.response.items=list[1]{Descripcion,Id}",
+    )
+    state = SourceState(
+        complete_result(lot()).model_copy(update={"diagnostics": (diagnostic,)})
+    )
+    database, runner = engine(tmp_path, state, profile())
+    try:
+        outcome = runner.run("profile-a", request_id="decoder-diagnostic-snapshot")
+        assert outcome.status == "completed"
+        snapshot = OperationalRepository(database).latest_snapshot()
+        assert snapshot is not None
+        assert snapshot.payload_json["sources"][0]["diagnostics"] == [
+            diagnostic.model_dump(mode="json")
         ]
     finally:
         database.dispose()
@@ -436,6 +540,49 @@ def test_complete_empty_discovery_closes_omitted_group_but_partial_does_not(tmp_
         database.dispose()
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        castells_complete_result(),
+        castells_complete_result(include_group=False),
+        castells_complete_result(castells_lot("lot:1")),
+        castells_complete_result().model_copy(
+            update={
+                "discovery_status": "partial",
+                "inventory_authoritative": False,
+                "errors": ("Castells timeout (1 group)",),
+            }
+        ),
+    ),
+    ids=("empty-group", "omitted-group", "implausible-drop", "partial-source"),
+)
+def test_castells_unstable_inventory_never_deactivates_previous_matches(
+    tmp_path: Path, replacement: SourceScanResult
+) -> None:
+    initial_lots = tuple(castells_lot(f"lot:{index}") for index in range(1, 9))
+    state = SourceState(castells_complete_result(*initial_lots))
+    database, runner = castells_engine(tmp_path, state)
+    try:
+        first = runner.run("consolas", request_id="stable-before")
+        assert first.status == "completed"
+        state.result = replacement
+
+        second = runner.run("consolas", request_id="unstable-after")
+
+        assert second.status == "partial"
+        repository = OperationalRepository(database)
+        assert len(repository.active_lots(("castells",))) == 8
+        assert len(repository.active_matches(("consolas",))) == 8
+        snapshot = repository.snapshot_for_run(second.run_id)
+        assert snapshot is not None
+        source = snapshot.payload_json["sources"][0]
+        assert source["omission_authoritative"] is False
+        assert "Castells unstable inventory evidence retained (1 group)" in source["errors"]
+        assert len(snapshot.payload_json["profiles"][0]["matches"]) == 8
+    finally:
+        database.dispose()
+
+
 def test_failed_run_does_not_replace_last_snapshot(tmp_path: Path) -> None:
     state = SourceState(complete_result(lot()))
     database, runner = engine(tmp_path, state, profile())
@@ -505,6 +652,22 @@ def test_duplicate_source_identities_fail_closed_before_reconciliation(tmp_path:
                 }
             ),
             "source contract violation (group cannot be both scanned and skipped)",
+        ),
+        (
+            complete_result(lot()).model_copy(
+                update={
+                    "diagnostics": (
+                        DecoderDiagnostic(
+                            group_id="missing-group",
+                            status="shadow_only",
+                            category="structure_drift",
+                            confidence="low",
+                            fingerprint="root=object[unknown]",
+                        ),
+                    )
+                }
+            ),
+            "source contract violation (decoder diagnostic belongs to an unscanned group)",
         ),
     ),
 )

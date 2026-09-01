@@ -54,6 +54,7 @@ type Snapshot = {
       source_id: string;
       status: string;
       inventory_authoritative: boolean;
+      omission_authoritative?: boolean;
       errors: string[];
       warnings?: string[];
       skipped_groups?: Array<{
@@ -61,6 +62,14 @@ type Snapshot = {
         title: string;
         status: "skipped_irrelevant";
         reason: "art_title";
+      }>;
+      diagnostics?: Array<{
+        group_id: string;
+        status: "adaptive_recovered" | "shadow_only";
+        category: string;
+        confidence: "high" | "medium" | "low";
+        path?: string | null;
+        fingerprint: string;
       }>;
     }>;
     profiles: Array<{ profile_id: string; matches: Match[] }>;
@@ -645,7 +654,7 @@ function App() {
       });
       setRun(current);
       setMessage("Corrida encolada…");
-      const deadline = Date.now() + 30000;
+      const deadline = Date.now() + 75000;
       while (current.status === "queued" || current.status === "running") {
         if (Date.now() >= deadline) throw new Error("timeout");
         await new Promise((resolve) => window.setTimeout(resolve, 500));
@@ -725,6 +734,8 @@ function App() {
     ) ?? [];
   const skippedSources =
     snapshot?.payload.sources.filter((source) => (source.skipped_groups?.length ?? 0) > 0) ?? [];
+  const diagnosticSources =
+    snapshot?.payload.sources.filter((source) => (source.diagnostics?.length ?? 0) > 0) ?? [];
 
   return (
     <div className="app-shell">
@@ -855,6 +866,28 @@ function App() {
                       {sourceNames[source.source_id] ?? source.source_id}: {source.skipped_groups?.length ?? 0}
                     </small>
                   ))}
+                </div>
+              )}
+              {snapshot && diagnosticSources.length > 0 && (
+                <div className="coverage-warning">
+                  <strong>Decodificación adaptativa</strong>
+                  <span>
+                    Sólo los envelopes inequívocos se publican; los demás quedan en sombra.
+                  </span>
+                  {diagnosticSources.map((source) => {
+                    const recovered =
+                      source.diagnostics?.filter((item) => item.status === "adaptive_recovered")
+                        .length ?? 0;
+                    const shadow =
+                      source.diagnostics?.filter((item) => item.status === "shadow_only").length ??
+                      0;
+                    return (
+                      <small key={source.source_id}>
+                        {sourceNames[source.source_id] ?? source.source_id}: {recovered} recuperados,
+                        {" "}{shadow} en sombra
+                      </small>
+                    );
+                  })}
                 </div>
               )}
               {snapshot && authoritative && matches.length === 0 && (

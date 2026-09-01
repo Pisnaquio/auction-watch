@@ -23,7 +23,12 @@ from auction_watch.sources import (
     TodoRematesSource,
 )
 from auction_watch.sources.bavastro import API_BASE, LOTS_BASE
-from auction_watch.sources.castells import LOTS_URL, MAX_WORKERS
+from auction_watch.sources.castells import (
+    LOTS_URL,
+    MAX_SCAN_SECONDS,
+    MAX_WORKERS,
+    REQUEST_TIMEOUT_SECONDS,
+)
 from auction_watch.sources.prado import PRODUCTS_API_URL as PRADO_PRODUCTS_URL
 from auction_watch.sources.todoremates import PRODUCTS_API_URL, REMATES_API_URL
 from auction_watch.sources.transport import HttpxTransport
@@ -136,7 +141,8 @@ def test_castells_requires_html_gxstate_and_reads_lots_endpoint() -> None:
             return FakeResponse(payload=load_json("castells_lots.json"))
         raise AssertionError(url)
 
-    result = CastellsSource(FakeTransport(handler)).scan()
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport).scan()
     assert result.discovery_status == "complete"
     assert result.groups[0].auction_id == "77"
     assert result.lots[0].lot_id == "77:16"
@@ -217,14 +223,231 @@ def test_castells_art_skip_never_hides_failure_in_relevant_group() -> None:
         assert parse_qs(urlsplit(url).query)["Remateid"] == ["2"]
         return FakeResponse(payload={"unexpected": []})
 
-    result = CastellsSource(FakeTransport(handler)).scan()
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport).scan()
 
     assert result.discovery_status == "partial"
     assert result.inventory_authoritative is False
     assert [group.group_id for group in result.skipped_groups] == ["1"]
     assert [receipt.group_id for receipt in result.receipts] == ["2"]
     assert result.receipts[0].status == "failed"
+    assert result.errors == ("Castells unverified empty result (1 group)",)
+
+
+def test_castells_adaptive_decoder_recovers_unique_lot_envelope() -> None:
+    payload = load_json("castells_adaptive_envelopes.json")["adaptive"]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload=payload)
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "complete"
+    assert result.inventory_authoritative is True
+    assert [lot.lot_id for lot in result.lots] == ["77:91"]
+    assert len(result.diagnostics) == 1
+    diagnostic = result.diagnostics[0]
+    assert diagnostic.status == "adaptive_recovered"
+    assert diagnostic.category == "envelope_drift"
+    assert diagnostic.confidence == "high"
+    assert diagnostic.path == "$.response.items"
+    assert "Consola recuperada" not in diagnostic.fingerprint
+    assert "1500" not in diagnostic.fingerprint
+
+
+def test_castells_adaptive_decoder_recovers_unique_root_list() -> None:
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload=[{"ID": "77:96", "description": "Consola"}])
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "complete"
+    assert [lot.lot_id for lot in result.lots] == ["77:96"]
+    assert result.diagnostics[0].path == "$"
+
+
+def test_castells_adaptive_decoder_keeps_ambiguous_envelope_in_shadow() -> None:
+    payload = load_json("castells_adaptive_envelopes.json")["ambiguous"]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload=payload)
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.lots == ()
+    assert result.errors == ("Castells ambiguous JSON envelope (1 group)",)
+    assert result.receipts[0].status == "failed"
+    assert result.diagnostics[0].status == "shadow_only"
+    assert result.diagnostics[0].category == "ambiguous_envelope"
+
+
+def test_castells_shadow_decoder_never_publishes_incomplete_lot_shape() -> None:
+    payload = load_json("castells_adaptive_envelopes.json")["shadow"]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload=payload)
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.lots == ()
+    assert result.errors == ("Castells lot shape drift (1 group)",)
+    diagnostic = result.diagnostics[0]
+    assert diagnostic.status == "shadow_only"
+    assert diagnostic.confidence == "medium"
+    assert diagnostic.path == "$.response.items"
+    assert len(transport.calls) == 2
+
+
+def test_castells_classifies_error_html_and_unverified_empty_payloads() -> None:
+    cases = (
+        (
+            load_json("castells_adaptive_envelopes.json")["error"],
+            "Castells error payload (1 group)",
+            "error_payload",
+        ),
+        (
+            {"status": "error", "items": []},
+            "Castells error payload (1 group)",
+            "error_payload",
+        ),
+        (
+            "<html><body>sanitized error</body></html>",
+            "Castells HTML response instead of JSON (1 group)",
+            "html_response",
+        ),
+        (
+            {"response": {"unknown": []}},
+            "Castells unverified empty result (1 group)",
+            "unverified_empty",
+        ),
+    )
+    for payload, expected_error, category in cases:
+        def handler(url: str, observed: Any = payload) -> FakeResponse:
+            if url == "https://subastascastells.com/frontend.home.aspx":
+                return FakeResponse(text=load_text("castells_home.html"))
+            if isinstance(observed, str):
+                return FakeResponse(text=observed)
+            return FakeResponse(payload=observed)
+
+        result = CastellsSource(FakeTransport(handler)).scan()
+        assert result.discovery_status == "partial"
+        assert result.lots == ()
+        assert result.errors == (expected_error,)
+        assert result.diagnostics[0].category == category
+
+
+def test_castells_trusts_unique_semantic_empty_list_and_records_evidence() -> None:
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload={"response": {"items": []}})
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "complete"
+    assert result.lots == ()
+    assert result.receipts[0].status == "complete"
+    assert result.diagnostics[0].status == "adaptive_recovered"
+    assert result.diagnostics[0].path == "$.response.items"
+
+
+def test_castells_fingerprint_never_contains_sensitive_keys_or_values() -> None:
+    payload = {
+        "response": {
+            "items": [
+                {
+                    "Id": "77:95",
+                    "Descripcion": "Console title that must not leak",
+                    "smtp_password": "not-a-real-password",
+                }
+            ]
+        }
+    }
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload=payload)
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+    fingerprint = result.diagnostics[0].fingerprint
+
+    assert result.discovery_status == "complete"
+    assert "Console title" not in fingerprint
+    assert "not-a-real-password" not in fingerprint
+    assert "smtp_password" not in fingerprint
+
+
+def test_castells_adaptive_traversal_never_exceeds_depth_bound() -> None:
+    payload: dict[str, Any] = {
+        "items": [{"Id": "77:97", "Descripcion": "Must stay unreachable"}]
+    }
+    for key in reversed(("a", "b", "c", "d", "e", "f", "g")):
+        payload = {key: payload}
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload=payload)
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.lots == ()
     assert result.errors == ("Castells structure drift (1 group)",)
+    assert result.diagnostics[0].status == "shadow_only"
+
+
+def test_castells_adaptive_decoder_rejects_oversized_candidate_list() -> None:
+    rows = [
+        {"Id": f"77:{index}", "Descripcion": f"Lote {index}"}
+        for index in range(501)
+    ]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        return FakeResponse(payload={"response": {"items": rows}})
+
+    result = CastellsSource(FakeTransport(handler)).scan()
+
+    assert result.discovery_status == "partial"
+    assert result.lots == ()
+    assert result.errors == ("Castells lot shape drift (1 group)",)
+    assert result.diagnostics[0].status == "shadow_only"
+
+
+def test_castells_adaptive_envelope_preserves_bounded_cursor_pagination() -> None:
+    rows = [
+        {"Id": f"77:{index}", "Descripcion": f"Lote {index}"}
+        for index in (1, 2, 3)
+    ]
+
+    def handler(url: str) -> FakeResponse:
+        if url == "https://subastascastells.com/frontend.home.aspx":
+            return FakeResponse(text=load_text("castells_home.html"))
+        cursor = parse_qs(urlsplit(url).query)["Lastloteid"][0]
+        page = rows[:2] if cursor == "0" else rows[2:]
+        return FakeResponse(payload={"response": {"items": page}})
+
+    transport = FakeTransport(handler)
+    result = CastellsSource(transport, page_size=2).scan()
+
+    assert result.discovery_status == "complete"
+    assert [lot.lot_id for lot in result.lots] == ["77:1", "77:2", "77:3"]
+    assert len(transport.calls) == 3
+    assert {item.status for item in result.diagnostics} == {"adaptive_recovered"}
 
 
 def test_castells_deduplicates_repeated_discovery_and_identical_lots() -> None:
@@ -461,7 +684,7 @@ def test_castells_later_page_timeout_preserves_prior_page() -> None:
     assert result.receipts[0].status == "partial"
 
 
-def test_castells_structure_drift_and_worker_bound_are_explicit() -> None:
+def test_castells_unverified_empty_and_worker_bound_are_explicit() -> None:
     def handler(url: str) -> FakeResponse:
         if url == "https://subastascastells.com/frontend.home.aspx":
             return FakeResponse(text=load_text("castells_home.html"))
@@ -471,7 +694,7 @@ def test_castells_structure_drift_and_worker_bound_are_explicit() -> None:
     result = source.scan()
 
     assert source.max_workers == MAX_WORKERS
-    assert result.errors == ("Castells structure drift (1 group)",)
+    assert result.errors == ("Castells unverified empty result (1 group)",)
     assert result.receipts[0].status == "failed"
 
 
@@ -567,6 +790,13 @@ def test_castells_productive_deadline_is_bounded_and_order_is_deterministic() ->
     assert [group.auction_id for group in result.groups] == ["10", "20", "30"]
     assert [receipt.group_id for receipt in result.receipts] == ["10", "20", "30"]
     assert result.inventory_authoritative is True
+
+
+def test_castells_defaults_have_a_bounded_latency_budget() -> None:
+    source = CastellsSource(FakeTransport(lambda _url: FakeResponse(payload={})))
+
+    assert source.timeout == REQUEST_TIMEOUT_SECONDS == 8.0
+    assert source.deadline_seconds == MAX_SCAN_SECONDS == 60.0
 
 
 def test_remotes_parses_rss_and_deduplicates_by_query_lot_id() -> None:

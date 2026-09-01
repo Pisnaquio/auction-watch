@@ -1,0 +1,44 @@
+{
+  "adaptive": {
+    "response": {
+      "items": [
+        {
+          "Id": "77:91",
+          "Descripcion": "Consola recuperada",
+          "ValorActual": "1500",
+          "LotePrecioSalidaMonedaWF": "UYU"
+        }
+      ]
+    }
+  },
+  "ambiguous": {
+    "response": {
+      "items": [
+        {
+          "Id": "77:92",
+          "Descripcion": "Primer candidato"
+        }
+      ],
+      "alternatives": [
+        {
+          "Id": "77:93",
+          "Descripcion": "Segundo candidato"
+        }
+      ]
+    }
+  },
+  "shadow": {
+    "response": {
+      "items": [
+        {
+          "Id": "77:94",
+          "UnexpectedField": "sanitized fixture value"
+        }
+      ]
+    }
+  },
+  "error": {
+    "status": "error",
+    "message": "sanitized fixture error"
+  }
+}

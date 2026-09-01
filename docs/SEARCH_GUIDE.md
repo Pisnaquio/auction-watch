@@ -47,6 +47,26 @@ ejemplo, arte junto con consolas, muebles, libros o “varios”— y títulos a
 como “Colección particular” se siguen consultando. Un descarte artístico nunca
 convierte en completa una corrida que tenga fallos en grupos relevantes.
 
+Si Castells cambia el envelope JSON, Auction Watch busca listas de lotes con un
+recorrido limitado por profundidad y cantidad de nodos. Sólo recupera en la
+misma corrida una lista única donde la gran mayoría de las filas tenga identidad
+y título estables. Si aparecen varias listas, faltan campos, llega HTML, un
+objeto de error o un vacío no verificable, el resultado queda `partial` y el
+candidato se evalúa únicamente en sombra.
+
+El snapshot conserva un fingerprint estructural con rutas y nombres de campos,
+nunca valores del payload. Ese diagnóstico no genera solicitudes adicionales,
+no persiste lotes, no modifica inventario y no dispara notificaciones por sí
+solo.
+
+Castells tampoco toma una desaparición del listado, un grupo activo vacío o
+una caída repentina de más del 75% como prueba suficiente para borrar lotes ya
+vistos. Conserva el último inventario sano y muestra la fuente como `partial`.
+Su consulta tiene un máximo de 8 segundos por solicitud y 60 segundos en total;
+al alcanzar esos límites publica las demás fuentes y la cobertura válida que
+ya obtuvo. No hay reintentos ni consultas adicionales de drift en segundo
+plano.
+
 ### Categorías, precio, urgencia y frecuencia
 
 Las categorías y el precio máximo reducen ruido. El editor actual aplica un
