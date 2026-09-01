@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { SearchGuideDialog, type SearchGuideData } from "./SearchGuide";
+import { editTermInput, parseTermInput } from "./term-inputs.js";
 
 type Rule = { term: string; required_any: string[]; excluded_any: string[] };
 type Profile = {
@@ -84,6 +85,14 @@ type RuntimeState = {
   scheduler_active: boolean;
   timezone: string;
 };
+type TermField =
+  | "keywords_any"
+  | "keywords_all"
+  | "exact_phrases"
+  | "exclude_keywords"
+  | "categories"
+  | "schedule_times";
+type TermInputs = Record<TermField, string>;
 
 const sourceNames: Record<string, string> = {
   bavastro: "Bavastro",
@@ -93,13 +102,16 @@ const sourceNames: Record<string, string> = {
   todoremates: "TodoRemates",
 };
 const sourceIds = Object.keys(sourceNames);
-const split = (value: string) =>
-  value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
 const join = (value: string[]) => value.join(", ");
 const copy = (value: Profile) => JSON.parse(JSON.stringify(value)) as Profile;
+const termInputsFromProfile = (profile: Profile): TermInputs => ({
+  keywords_any: join(profile.keywords_any),
+  keywords_all: join(profile.keywords_all),
+  exact_phrases: join(profile.exact_phrases),
+  exclude_keywords: join(profile.exclude_keywords),
+  categories: join(profile.categories),
+  schedule_times: join(profile.schedule.times),
+});
 
 function emptyProfile(): Profile {
   return {
@@ -158,7 +170,9 @@ function Editor({
   creating,
   busy,
   warnings,
+  termInputs,
   onChange,
+  onTermInputChange,
   onSubmit,
 }: {
   profile: Profile;
@@ -166,7 +180,9 @@ function Editor({
   creating: boolean;
   busy: boolean;
   warnings: GuidanceWarning[];
+  termInputs: TermInputs;
   onChange: <K extends keyof Profile>(key: K, value: Profile[K]) => void;
+  onTermInputChange: (key: TermField, value: string) => void;
   onSubmit: (profile: Profile, bypassWarnings: boolean) => void;
 }) {
   const [boosts, setBoosts] = useState(JSON.stringify(profile.boost_keywords, null, 2));
@@ -183,6 +199,15 @@ function Editor({
   function parsedProfile(): Profile {
     return {
       ...profile,
+      keywords_any: parseTermInput(termInputs.keywords_any),
+      keywords_all: parseTermInput(termInputs.keywords_all),
+      exact_phrases: parseTermInput(termInputs.exact_phrases),
+      exclude_keywords: parseTermInput(termInputs.exclude_keywords),
+      categories: parseTermInput(termInputs.categories),
+      schedule: {
+        ...profile.schedule,
+        times: parseTermInput(termInputs.schedule_times),
+      },
       boost_keywords: JSON.parse(boosts) as Record<string, number>,
       context_rules: JSON.parse(contexts) as Rule[],
     };
@@ -237,45 +262,45 @@ function Editor({
         Cualquiera de estos términos
         <input
           disabled={locked}
-          onChange={(event) => update("keywords_any", split(event.target.value))}
+          onChange={(event) => onTermInputChange("keywords_any", event.target.value)}
           placeholder="libro, novela, edición"
-          value={join(profile.keywords_any)}
+          value={termInputs.keywords_any}
         />
       </label>
       <label>
         Debe incluir todos
         <input
           disabled={locked}
-          onChange={(event) => update("keywords_all", split(event.target.value))}
+          onChange={(event) => onTermInputChange("keywords_all", event.target.value)}
           placeholder="mesa, ping pong"
-          value={join(profile.keywords_all)}
+          value={termInputs.keywords_all}
         />
       </label>
       <label>
         Frases exactas
         <input
           disabled={locked}
-          onChange={(event) => update("exact_phrases", split(event.target.value))}
+          onChange={(event) => onTermInputChange("exact_phrases", event.target.value)}
           placeholder="biblioteca de autor"
-          value={join(profile.exact_phrases)}
+          value={termInputs.exact_phrases}
         />
       </label>
       <label>
         Excluir términos
         <input
           disabled={locked}
-          onChange={(event) => update("exclude_keywords", split(event.target.value))}
+          onChange={(event) => onTermInputChange("exclude_keywords", event.target.value)}
           placeholder="réplica, incompleto"
-          value={join(profile.exclude_keywords)}
+          value={termInputs.exclude_keywords}
         />
       </label>
       <label>
         Categorías aceptadas
         <input
           disabled={locked}
-          onChange={(event) => update("categories", split(event.target.value))}
+          onChange={(event) => onTermInputChange("categories", event.target.value)}
           placeholder="libros, literatura"
-          value={join(profile.categories)}
+          value={termInputs.categories}
         />
       </label>
       <div className="field-grid two">
@@ -396,14 +421,11 @@ function Editor({
           <input
             disabled={locked}
             onChange={(event) =>
-              update("schedule", {
-                ...profile.schedule,
-                times: split(event.target.value),
-              })
+              onTermInputChange("schedule_times", event.target.value)
             }
             placeholder="09:00, 18:00"
             required={profile.schedule.enabled}
-            value={join(profile.schedule.times)}
+            value={termInputs.schedule_times}
           />
         </label>
       </div>
@@ -503,6 +525,9 @@ function App() {
   const [profiles, setProfiles] = useState<ProfileView[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState(emptyProfile());
+  const [termInputs, setTermInputs] = useState<TermInputs>(() =>
+    termInputsFromProfile(emptyProfile()),
+  );
   const [creating, setCreating] = useState(false);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [history, setHistory] = useState<Run[]>([]);
@@ -566,7 +591,11 @@ function App() {
 
   useEffect(() => {
     if (selectedId && !creating) {
-      setDraft(copy(profiles.find((item) => item.profile.id === selectedId)?.profile ?? emptyProfile()));
+      const profile = copy(
+        profiles.find((item) => item.profile.id === selectedId)?.profile ?? emptyProfile(),
+      );
+      setDraft(profile);
+      setTermInputs(termInputsFromProfile(profile));
       setGuidanceWarnings([]);
       void loadData(selectedId);
     }
@@ -575,6 +604,17 @@ function App() {
   const updateDraft = <K extends keyof Profile>(key: K, value: Profile[K]) => {
     setGuidanceWarnings([]);
     setDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateTermInput = (key: TermField, value: string) => {
+    const editing = editTermInput(value);
+    setGuidanceWarnings([]);
+    setTermInputs((current) => ({ ...current, [key]: editing.text }));
+    setDraft((current) =>
+      key === "schedule_times"
+        ? { ...current, schedule: { ...current.schedule, times: editing.terms } }
+        : { ...current, [key]: editing.terms },
+    );
   };
 
   async function openGuide() {
@@ -752,7 +792,9 @@ function App() {
           onClick={() => {
             setCreating(true);
             setSelectedId(null);
-            setDraft(emptyProfile());
+            const profile = emptyProfile();
+            setDraft(profile);
+            setTermInputs(termInputsFromProfile(profile));
             setSnapshot(null);
             setGuidanceWarnings([]);
           }}
@@ -817,11 +859,13 @@ function App() {
               busy={busy}
               creating={creating}
               onChange={updateDraft}
+              onTermInputChange={updateTermInput}
               onSubmit={(profile, bypassWarnings) =>
                 void saveProfile(profile, bypassWarnings)
               }
               profile={draft}
               selected={selected}
+              termInputs={termInputs}
               warnings={guidanceWarnings}
             />
             <section className="panel opportunities">
@@ -983,7 +1027,9 @@ function App() {
               className="button primary"
               onClick={() => {
                 setCreating(true);
-                setDraft(emptyProfile());
+                const profile = emptyProfile();
+                setDraft(profile);
+                setTermInputs(termInputsFromProfile(profile));
                 setGuidanceWarnings([]);
               }}
             >
