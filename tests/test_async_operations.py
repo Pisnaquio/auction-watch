@@ -28,7 +28,11 @@ def make_profile(profile_id: str = "libros", *, mode: str = "disabled") -> Searc
         source_ids=["bavastro"],
         keywords_any=["libro"],
         notification_mode=mode,
-        schedule={"enabled": True, "times": ["09:00"], "timezone": "UTC"},
+        schedule={
+            "enabled": True,
+            "times": ["09:00"],
+            "timezone": "America/Montevideo",
+        },
     )
 
 
@@ -119,10 +123,10 @@ def test_scheduler_respects_pause_and_manual_success_covers_slot(tmp_path: Path)
         profiles = ProfileRepository(db)
         queue = RunQueueRepository(db)
         assert enqueue_due_profiles(profiles, queue, now=NOW) == ("libros",)
-        assert enqueue_due_profiles(profiles, queue, now=NOW) == ("libros",)
+        assert enqueue_due_profiles(profiles, queue, now=NOW) == ()
         job = queue.claim_next(now=NOW)
         assert job is not None
-        queue.finish(job.run_id, status="completed", finished_at=NOW)
+        queue.finish(job.run_id, status="partial", finished_at=NOW)
         assert enqueue_due_profiles(profiles, queue, now=NOW) == ()
         current = profiles.get("libros")
         assert current is not None
@@ -131,6 +135,77 @@ def test_scheduler_respects_pause_and_manual_success_covers_slot(tmp_path: Path)
             expected_revision=current.revision,
         )
         assert enqueue_due_profiles(profiles, queue, now=NOW + timedelta(days=1)) == ()
+    finally:
+        db.dispose()
+
+
+def test_scheduler_honors_timezone_and_never_backfills_hours_late(tmp_path: Path) -> None:
+    db = database(tmp_path)
+    try:
+        profiles = ProfileRepository(db)
+        queue = RunQueueRepository(db)
+        utc = make_profile("utc-profile").model_copy(
+            update={
+                "schedule": make_profile("utc-profile").schedule.model_copy(
+                    update={"timezone": "UTC"}
+                )
+            }
+        )
+        profiles.create(utc)
+
+        assert enqueue_due_profiles(profiles, queue, now=NOW - timedelta(hours=3)) == (
+            "utc-profile",
+        )
+        assert enqueue_due_profiles(profiles, queue, now=NOW - timedelta(minutes=1)) == ()
+        assert enqueue_due_profiles(profiles, queue, now=NOW + timedelta(minutes=16)) == ()
+    finally:
+        db.dispose()
+
+
+def test_fresh_manual_partial_run_covers_the_daily_slot(tmp_path: Path) -> None:
+    db = database(tmp_path)
+    try:
+        queue = RunQueueRepository(db)
+        manual, created = queue.enqueue(
+            idempotency_key="manual-covers-slot",
+            profile_id="libros",
+            trigger="manual",
+            revision=1,
+            now=NOW + timedelta(minutes=1),
+        )
+        assert created is True
+        claimed = queue.claim_next(now=NOW + timedelta(minutes=1))
+        assert claimed is not None and claimed.run_id == manual.run_id
+        queue.finish(
+            manual.run_id,
+            status="partial",
+            finished_at=NOW + timedelta(minutes=2),
+        )
+        assert enqueue_due_profiles(
+            ProfileRepository(db), queue, now=NOW + timedelta(minutes=3)
+        ) == ()
+    finally:
+        db.dispose()
+
+
+def test_manual_run_just_before_schedule_also_covers_the_slot(tmp_path: Path) -> None:
+    db = database(tmp_path)
+    try:
+        queue = RunQueueRepository(db)
+        manual, _ = queue.enqueue(
+            idempotency_key="manual-before-slot",
+            profile_id="libros",
+            trigger="manual",
+            revision=1,
+            now=NOW - timedelta(minutes=5),
+        )
+        assert queue.claim_next(now=NOW - timedelta(minutes=5)) is not None
+        queue.finish(
+            manual.run_id,
+            status="completed",
+            finished_at=NOW - timedelta(minutes=1),
+        )
+        assert enqueue_due_profiles(ProfileRepository(db), queue, now=NOW) == ()
     finally:
         db.dispose()
 
@@ -252,6 +327,13 @@ def test_planner_notifies_only_new_matches_or_failures(tmp_path: Path) -> None:
         )
         assert failure is not None
         assert "https://secret.test" not in str(failure.payload)
+
+        sender = FakeNotificationSender()
+        delivery = NotificationDeliveryWorker(repository, sender, now=lambda: NOW)
+        while delivery.run_once():
+            pass
+        assert len(sender.messages) == 2
+        assert {item.status for item in repository.recent("libros")} == {"sent"}
     finally:
         db.dispose()
 

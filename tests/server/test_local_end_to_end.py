@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from auction_watch.config import Settings
 from auction_watch.core.models import AuctionGroup, AuctionLot
 from auction_watch.main import create_app
+from auction_watch.notifications.sender import FakeNotificationSender
 from auction_watch.runner import AuctionRunEngine
 from auction_watch.sources.base import BaseAuctionSource
 from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
@@ -83,14 +84,23 @@ def profile_payload() -> dict[str, object]:
         "name": "Local smoke",
         "source_ids": ["bavastro"],
         "keywords_any": ["console"],
-        "notification_mode": "disabled",
+        "notification_mode": "matches_or_failure",
         "schedule": {"enabled": False, "times": [], "timezone": "UTC"},
     }
 
 
 def test_local_api_queue_worker_snapshot_flow(tmp_path: Path) -> None:
+    sender = FakeNotificationSender()
     application = create_app(
-        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=fixture_engine
+        Settings(
+            data_dir=tmp_path,
+            worker_enabled=False,
+            smtp_enabled=True,
+            smtp_host="smtp.fixture.invalid",
+            smtp_recipient="fixture@example.invalid",
+        ),
+        run_engine_factory=fixture_engine,
+        notification_sender_factory=lambda **_: sender,
     )
     with TestClient(application) as client:
         created = client.post("/api/v1/profiles", json={"profile": profile_payload()})
@@ -128,3 +138,7 @@ def test_local_api_queue_worker_snapshot_flow(tmp_path: Path) -> None:
         assert snapshot.status_code == 200
         matches = snapshot.json()["payload"]["profiles"][0]["matches"]
         assert len(matches) == 1
+        notifications = client.get("/api/v1/profiles/local-smoke/notifications")
+        assert notifications.status_code == 200
+        assert notifications.json()[0]["status"] == "sent"
+        assert len(sender.messages) == 1

@@ -39,6 +39,7 @@ from auction_watch.sources.transport import HttpxTransport, Transport
 logger = logging.getLogger(__name__)
 LEASE_TTL = timedelta(minutes=5)
 MAX_PARALLEL_SOURCES = 5
+SCHEDULE_GRACE = timedelta(minutes=15)
 
 
 def _sanitize_error(value: str) -> str:
@@ -59,7 +60,7 @@ def due_profiles(
     last_successful_by_profile: Mapping[str, datetime],
     now: datetime,
 ) -> tuple[str, ...]:
-    """Return enabled profiles whose latest elapsed schedule slot is uncovered."""
+    """Return uncovered profiles only inside a bounded schedule window."""
 
     current = now.astimezone(UTC)
     due: list[str] = []
@@ -78,8 +79,13 @@ def due_profiles(
         if not candidates:
             continue
         latest_slot = max(candidates)
+        if current >= latest_slot + SCHEDULE_GRACE:
+            continue
         last_success = last_successful_by_profile.get(profile.id)
-        if last_success is None or last_success.astimezone(UTC) < latest_slot:
+        if (
+            last_success is None
+            or last_success.astimezone(UTC) < latest_slot - SCHEDULE_GRACE
+        ):
             due.append(profile.id)
     return tuple(due)
 

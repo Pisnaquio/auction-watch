@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.12
+
+- Programa el perfil protegido Consolas todos los días a las 09:00 en
+  `America/Montevideo`, con alertas ante hallazgos o fallos.
+- Limita la recuperación automática a 15 minutos desde cada horario y cuenta
+  snapshots parciales válidos como cobertura del slot, evitando duplicados.
+- Expone en la UI el estado no sensible del worker y scheduler, y separa el
+  interruptor de automatización de los horarios editables en perfiles propios.
+
 ## 0.1.11
 
 - Mejora la cobertura de Castells con paginación acotada, menor concurrencia,

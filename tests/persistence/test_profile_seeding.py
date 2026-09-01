@@ -28,6 +28,10 @@ def test_consolas_seed_is_idempotent_and_preserves_pause(repository: ProfileRepo
     assert loaded is not None
     assert loaded.profile.risk_keywords["no prende"] == 8
     assert any(rule.term == "switch" for rule in loaded.profile.context_rules)
+    assert loaded.profile.schedule.enabled is True
+    assert loaded.profile.schedule.times == ("09:00",)
+    assert loaded.profile.schedule.timezone == "America/Montevideo"
+    assert loaded.profile.notification_mode == "matches_or_failure"
     assert repository.seed_system_profile(consoles_profile()).revision == 1
 
     paused = first.profile.model_copy(update={"enabled": False})
@@ -65,14 +69,17 @@ def test_consolas_seed_upgrades_v1_to_context_hardened_v2(
     assert {rule.term for rule in upgraded.profile.context_rules} >= {"mario", "family", "ds"}
 
 
-def test_seed_v3_repairs_criteria_but_preserves_operational_settings(
+def test_seed_v4_repairs_criteria_and_applies_daily_automation_once(
     repository: ProfileRepository,
 ) -> None:
     legacy = consoles_profile().model_copy(
         update={
-            "seed_version": 2,
+            "seed_version": 3,
             "keywords_all": ("autor", "tapa dura"),
-            "notification_mode": "matches_or_failure",
+            "notification_mode": "disabled",
+            "schedule": consoles_profile().schedule.model_copy(
+                update={"enabled": False, "times": (), "timezone": "UTC"}
+            ),
         }
     )
     first = repository.seed_system_profile(legacy)
@@ -81,6 +88,10 @@ def test_seed_v3_repairs_criteria_but_preserves_operational_settings(
     assert upgraded.revision == first.revision + 1
     assert upgraded.profile.keywords_all == ()
     assert upgraded.profile.notification_mode == "matches_or_failure"
+    assert upgraded.profile.schedule.enabled is True
+    assert upgraded.profile.schedule.times == ("09:00",)
+    assert upgraded.profile.schedule.timezone == "America/Montevideo"
+    assert repository.seed_system_profile(consoles_profile()).revision == upgraded.revision
 
 
 def test_system_profile_cannot_be_deleted_or_change_identity(repository: ProfileRepository) -> None:

@@ -44,6 +44,7 @@ def _web_dist() -> Path:
 def create_app(
     settings: Settings | None = None,
     run_engine_factory: Any = AuctionRunEngine,
+    notification_sender_factory: Any = SMTPNotificationSender,
 ) -> FastAPI:
     """Create an application without opening SQLite during import."""
 
@@ -53,6 +54,12 @@ def create_app(
         database: Database | None = None
         worker_thread: Thread | None = None
         stop_worker = Event()
+        application.state.runtime_configuration = {
+            "worker_enabled": runtime_settings.worker_enabled,
+            "scheduler_enabled": runtime_settings.scheduler_enabled,
+            "timezone": runtime_settings.timezone,
+        }
+        application.state.worker_thread = None
         try:
             try:
                 database = Database.open(runtime_settings.data_dir)
@@ -76,7 +83,7 @@ def create_app(
                 )
                 queue = RunQueueRepository(database)
                 notifications = NotificationRepository(database)
-                sender = SMTPNotificationSender(
+                sender = notification_sender_factory(
                     host=runtime_settings.smtp_host,
                     port=runtime_settings.smtp_port,
                     sender=runtime_settings.smtp_sender,
@@ -99,6 +106,7 @@ def create_app(
                 )
                 schedule_once = None
                 if runtime_settings.scheduler_enabled:
+
                     def schedule_once() -> object:
                         return enqueue_due_profiles(
                             application.state.profile_repository,
@@ -132,6 +140,7 @@ def create_app(
                         daemon=True,
                     )
                     worker_thread.start()
+                    application.state.worker_thread = worker_thread
             yield
         finally:
             stop_worker.set()
@@ -147,6 +156,7 @@ def create_app(
             application.state.notifications = None
             application.state.notification_configured = False
             application.state.worker = None
+            application.state.worker_thread = None
 
     application = FastAPI(title="Auction Watch", version=__version__, lifespan=lifespan)
     application.add_middleware(IngressSecurityMiddleware)
@@ -169,6 +179,22 @@ def create_app(
         ready = database is not None and database.check_ready()
         payload = {"ok": ready, "service": "auction-watch", "version": __version__}
         return JSONResponse(status_code=200 if ready else 503, content=payload)
+
+    @application.get("/api/v1/runtime")
+    def runtime(request: Request) -> dict[str, object]:
+        """Expose only non-sensitive worker and scheduler state to the UI."""
+
+        configuration = getattr(request.app.state, "runtime_configuration", {})
+        worker_thread = getattr(request.app.state, "worker_thread", None)
+        worker_running = bool(worker_thread is not None and worker_thread.is_alive())
+        scheduler_enabled = bool(configuration.get("scheduler_enabled", False))
+        return {
+            "worker_enabled": bool(configuration.get("worker_enabled", False)),
+            "worker_running": worker_running,
+            "scheduler_enabled": scheduler_enabled,
+            "scheduler_active": worker_running and scheduler_enabled,
+            "timezone": str(configuration.get("timezone", "UTC")),
+        }
 
     @application.get("/", include_in_schema=False)
     def index() -> Response:

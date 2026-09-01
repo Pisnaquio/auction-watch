@@ -198,11 +198,13 @@ class RunQueueRepository:
             session.flush()
             return self._record(row)
 
-    def last_successful_by_profile(self) -> dict[str, datetime]:
+    def last_covered_by_profile(self) -> dict[str, datetime]:
+        """Return the latest run that produced a publishable snapshot per profile."""
+
         with self._database.sessions.begin() as session:
             rows = session.scalars(
                 select(RunQueueRow).where(
-                    RunQueueRow.status == "completed",
+                    RunQueueRow.status.in_(("completed", "partial")),
                     RunQueueRow.finished_at.is_not(None),
                 )
             ).all()

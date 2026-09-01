@@ -62,6 +62,13 @@ type Snapshot = {
   };
 };
 type GuidanceWarning = { code: string; field: string; message: string };
+type RuntimeState = {
+  worker_enabled: boolean;
+  worker_running: boolean;
+  scheduler_enabled: boolean;
+  scheduler_active: boolean;
+  timezone: string;
+};
 
 const sourceNames: Record<string, string> = {
   bavastro: "Bavastro",
@@ -316,6 +323,17 @@ function Editor({
       <div className="panel-heading compact">
         <h3>Precio, frecuencia y alertas</h3>
       </div>
+      <label className="check">
+        <input
+          checked={profile.schedule.enabled}
+          disabled={locked}
+          onChange={(event) =>
+            update("schedule", { ...profile.schedule, enabled: event.target.checked })
+          }
+          type="checkbox"
+        />
+        Automatización diaria activa para este perfil
+      </label>
       <div className="field-grid three">
         <label>
           Máximo
@@ -366,10 +384,10 @@ function Editor({
               update("schedule", {
                 ...profile.schedule,
                 times: split(event.target.value),
-                enabled: Boolean(event.target.value.trim()),
               })
             }
             placeholder="09:00, 18:00"
+            required={profile.schedule.enabled}
             value={join(profile.schedule.times)}
           />
         </label>
@@ -484,13 +502,18 @@ function App() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideLoading, setGuideLoading] = useState(false);
   const [guide, setGuide] = useState<SearchGuideData | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeState | null>(null);
   const selected = profiles.find((item) => item.profile.id === selectedId) ?? null;
 
   const loadProfiles = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await api<ProfileView[]>("/api/v1/profiles");
+      const [result, runtimeState] = await Promise.all([
+        api<ProfileView[]>("/api/v1/profiles"),
+        api<RuntimeState>("/api/v1/runtime"),
+      ]);
       setProfiles(result);
+      setRuntime(runtimeState);
       setSelectedId((current) =>
         current && result.some((item) => item.profile.id === current)
           ? current
@@ -744,6 +767,14 @@ function App() {
             <h1>{creating ? "Crear búsqueda" : (selected?.profile.name ?? "Tus perfiles")}</h1>
           </div>
           <div className="top-actions">
+            {runtime && (
+              <span
+                className={`status-pill ${runtime.scheduler_active ? "on" : "off"}`}
+                title={`Worker ${runtime.worker_running ? "activo" : "inactivo"}; zona ${runtime.timezone}`}
+              >
+                Automatización {runtime.scheduler_active ? "activa" : "inactiva"}
+              </span>
+            )}
             <button className="button help-button" onClick={() => void openGuide()}>
               ? Cómo buscar mejor
             </button>

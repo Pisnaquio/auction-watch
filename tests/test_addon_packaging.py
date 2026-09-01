@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_addon_options_accept_safe_configuration_and_reject_invalid_values() -> None:
     options = AddonOptions(timezone="America/Montevideo")
     assert options.smtp_enabled is False
-    assert options.scheduler_enabled is False
+    assert options.scheduler_enabled is True
 
     with pytest.raises(ValidationError):
         AddonOptions(timezone="not/a-timezone")
@@ -40,7 +40,9 @@ def test_addon_runtime_enables_worker_only_in_addon_environment(tmp_path: Path) 
     apply_environment(options, environment)
 
     assert Settings().worker_enabled is False
+    assert Settings().scheduler_enabled is False
     assert environment["AW_WORKER_ENABLED"] == "true"
+    assert environment["AW_SCHEDULER_ENABLED"] == "true"
     assert environment["AW_DATA_DIR"] == "/data/auction-watch"
     assert environment["AW_SMTP_ENABLED"] == "false"
     assert "AW_SMTP_PASSWORD" not in environment
@@ -109,14 +111,36 @@ def test_ingress_security_rejects_foreign_origin_without_open_cors(tmp_path: Pat
         }
 
 
+def test_runtime_endpoint_exposes_only_safe_scheduler_state(tmp_path: Path) -> None:
+    application = create_app(
+        Settings(
+            data_dir=tmp_path,
+            worker_enabled=False,
+            scheduler_enabled=True,
+            timezone="America/Montevideo",
+        )
+    )
+    with TestClient(application) as client:
+        response = client.get("/api/v1/runtime")
+        assert response.status_code == 200
+        assert response.json() == {
+            "worker_enabled": False,
+            "worker_running": False,
+            "scheduler_enabled": True,
+            "scheduler_active": False,
+            "timezone": "America/Montevideo",
+        }
+
+
 def test_addon_artifact_inputs_are_explicitly_whitelisted() -> None:
     manifest = (ROOT / "config.yaml").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "ingress: true" in manifest
     assert "map:\n  - type: data\n    read_only: false" in manifest
     assert "smtp_enabled: false" in manifest
-    assert "scheduler_enabled: false" in manifest
+    assert "scheduler_enabled: true" in manifest
     assert "AW_WORKER_ENABLED=true" in dockerfile
+    assert "AW_SCHEDULER_ENABLED=false" in dockerfile
     assert "AW_DATA_DIR=/data/auction-watch" in dockerfile
     assert "COPY rootfs /" in dockerfile
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")

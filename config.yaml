@@ -1,5 +1,5 @@
 name: Auction Watch
-version: "0.1.11"
+version: "0.1.12"
 slug: auctionwatch
 description: Monitor público de subastas con perfiles independientes
 startup: application
@@ -24,7 +24,7 @@ panel_admin: false
 watchdog: "http://[HOST]:[PORT:8789]/api/v1/health"
 options:
   timezone: America/Montevideo
-  scheduler_enabled: false
+  scheduler_enabled: true
   worker_poll_seconds: 0.5
   smtp_enabled: false
   smtp_host: ""
