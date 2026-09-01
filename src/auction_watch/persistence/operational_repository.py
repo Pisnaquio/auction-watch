@@ -123,6 +123,12 @@ class OperationalRepository:
     @staticmethod
     def _upsert_lot(session: Session, lot: LotRecord) -> None:
         row = session.get(AuctionLotRow, (lot.source_id, lot.auction_id, lot.lot_id))
+        OperationalRepository._write_lot(session, lot, row)
+
+    @staticmethod
+    def _write_lot(
+        session: Session, lot: LotRecord, row: AuctionLotRow | None
+    ) -> AuctionLotRow:
         values = {
             "title": lot.title,
             "description": lot.description,
@@ -138,17 +144,17 @@ class OperationalRepository:
             "observed_at": lot.observed_at,
         }
         if row is None:
-            session.add(
-                AuctionLotRow(
-                    source_id=lot.source_id,
-                    auction_id=lot.auction_id,
-                    lot_id=lot.lot_id,
-                    **values,
-                )
+            row = AuctionLotRow(
+                source_id=lot.source_id,
+                auction_id=lot.auction_id,
+                lot_id=lot.lot_id,
+                **values,
             )
+            session.add(row)
         else:
             for key, value in values.items():
                 setattr(row, key, value)
+        return row
 
     def create_run(self, run: RunRecord) -> None:
         with self._database.sessions.begin() as session:
@@ -313,19 +319,39 @@ class OperationalRepository:
                 and receipt.lot_count == len(lots)
             )
             lot_ids = {lot.lot_id for lot in lots}
-            for lot in lots:
-                self._upsert_lot(session, lot)
-                self._touch_lifecycle(session, lot, run_id, observed)
-            if receipt_authoritative:
-                rows = session.scalars(
+            stored_lots = {
+                row.lot_id: row
+                for row in session.scalars(
                     select(AuctionLotRow).where(
                         AuctionLotRow.source_id == source_id,
                         AuctionLotRow.auction_id == group_id,
                     )
                 ).all()
-                for row in rows:
+            }
+            lifecycles = {
+                row.lot_id: row
+                for row in session.scalars(
+                    select(OpportunityRow).where(
+                        OpportunityRow.source_id == source_id,
+                        OpportunityRow.auction_id == group_id,
+                    )
+                ).all()
+            }
+            for lot in lots:
+                self._write_lot(session, lot, stored_lots.get(lot.lot_id))
+                self._touch_lifecycle(
+                    session,
+                    lot,
+                    run_id,
+                    observed,
+                    lifecycles.get(lot.lot_id),
+                )
+            if receipt_authoritative:
+                for row in stored_lots.values():
                     if row.lot_id not in lot_ids:
-                        self._remove_lifecycle(session, row, run_id, observed)
+                        self._remove_lifecycle(
+                            lifecycles.get(row.lot_id), run_id, observed
+                        )
             return self._lifecycle_for_group(session, source_id, group_id)
 
     def reconcile_omitted_groups(self, run_id: str, source_id: str) -> None:
@@ -348,38 +374,44 @@ class OperationalRepository:
                 ).all()
             )
             observed = _utc_now()
-            groups = session.scalars(
-                select(GroupRow).where(GroupRow.source_id == source_id)
-            ).all()
-            for group in groups:
-                if group.group_id in receipt_groups:
-                    continue
-                old_lots = session.scalars(
-                    select(AuctionLotRow).where(
-                        AuctionLotRow.source_id == source_id,
-                        AuctionLotRow.auction_id == group.group_id,
-                    )
+            lifecycles = {
+                (row.auction_id, row.lot_id): row
+                for row in session.scalars(
+                    select(OpportunityRow).where(OpportunityRow.source_id == source_id)
                 ).all()
-                for old_lot in old_lots:
-                    self._remove_lifecycle(session, old_lot, run_id, observed)
+            }
+            old_lots = session.scalars(
+                select(AuctionLotRow).where(AuctionLotRow.source_id == source_id)
+            ).all()
+            for old_lot in old_lots:
+                if old_lot.auction_id not in receipt_groups:
+                    self._remove_lifecycle(
+                        lifecycles.get((old_lot.auction_id, old_lot.lot_id)),
+                        run_id,
+                        observed,
+                    )
 
     @staticmethod
-    def _touch_lifecycle(session: Session, lot: LotRecord, run_id: str, observed: datetime) -> None:
-        row = session.get(OpportunityRow, (lot.source_id, lot.auction_id, lot.lot_id))
+    def _touch_lifecycle(
+        session: Session,
+        lot: LotRecord,
+        run_id: str,
+        observed: datetime,
+        row: OpportunityRow | None = None,
+    ) -> OpportunityRow:
         if row is None:
-            session.add(
-                OpportunityRow(
-                    source_id=lot.source_id,
-                    auction_id=lot.auction_id,
-                    lot_id=lot.lot_id,
-                    first_seen_at=observed,
-                    last_seen_at=observed,
-                    seen_count=1,
-                    active=True,
-                    last_present_run_id=run_id,
-                )
+            row = OpportunityRow(
+                source_id=lot.source_id,
+                auction_id=lot.auction_id,
+                lot_id=lot.lot_id,
+                first_seen_at=observed,
+                last_seen_at=observed,
+                seen_count=1,
+                active=True,
+                last_present_run_id=run_id,
             )
-            return
+            session.add(row)
+            return row
         already_counted = row.last_present_run_id == run_id or row.last_absence_run_id == run_id
         row.last_seen_at = observed
         if not already_counted:
@@ -387,12 +419,12 @@ class OperationalRepository:
         row.active = True
         row.removed_at = None
         row.last_present_run_id = run_id
+        return row
 
     @staticmethod
     def _remove_lifecycle(
-        session: Session, lot: AuctionLotRow, run_id: str, observed: datetime
+        row: OpportunityRow | None, run_id: str, observed: datetime
     ) -> None:
-        row = session.get(OpportunityRow, (lot.source_id, lot.auction_id, lot.lot_id))
         if row is not None and row.active and row.last_absence_run_id != run_id:
             row.active = False
             row.removed_at = observed

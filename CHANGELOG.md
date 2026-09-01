@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.15
+
+- Reemplaza las consultas SQLite por lote durante reconciliación por una
+  precarga transaccional constante de inventario y ciclo de vida por grupo.
+- Mantiene exactamente las mismas reglas fail-closed y agrega una regresión de
+  250 lotes que limita la reconciliación a cuatro lecturas SQL.
+
 ## 0.1.14
 
 - Agrega un decoder estructural acotado para recuperar automáticamente
