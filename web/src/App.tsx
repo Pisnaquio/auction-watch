@@ -94,6 +94,36 @@ type TermField =
   | "schedule_times";
 type TermInputs = Record<TermField, string>;
 
+function SectionIcon({ path }: { path: string }) {
+  return (
+    <svg fill="none" height="14" stroke="#55b7a9" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" width="14">
+      <path d={path} />
+    </svg>
+  );
+}
+const ICON_TERMS = "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm10 17-4.3-4.3";
+const ICON_SCOPE = "M3 3v18h18M7 15l4-6 4 3 5-7";
+const ICON_SOURCES = "M3 4h18v16H3zM3 9h18";
+const ICON_BOLT = "M13 2 3 14h7l-1 8 10-12h-7l1-8Z";
+
+function StatusIcon({ path, tone }: { path: string; tone: "teal" | "amber" | "green" }) {
+  const colors = {
+    teal: { bg: "#e5f5f1", fg: "#147267" },
+    amber: { bg: "#fff3c7", fg: "#78611c" },
+    green: { bg: "#d9f4ec", fg: "#13715e" },
+  }[tone];
+  return (
+    <div className="status-strip-icon" style={{ background: colors.bg, color: colors.fg }}>
+      <svg fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" width="16">
+        <path d={path} />
+      </svg>
+    </div>
+  );
+}
+const ICON_CLOCK = "M12 12V7M12 12l3 3M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z";
+const ICON_CALENDAR = "M12 8v5l4 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z";
+const ICON_BELL = "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9ZM13.7 21a2 2 0 0 1-3.4 0";
+
 const sourceNames: Record<string, string> = {
   bavastro: "Bavastro",
   castells: "Castells",
@@ -258,75 +288,89 @@ function Editor({
           </label>
         </div>
       )}
-      <label>
-        Cualquiera de estos términos
-        <input
-          disabled={locked}
-          onChange={(event) => onTermInputChange("keywords_any", event.target.value)}
-          placeholder="libro, novela, edición"
-          value={termInputs.keywords_any}
-        />
-      </label>
-      <label>
-        Debe incluir todos
-        <input
-          disabled={locked}
-          onChange={(event) => onTermInputChange("keywords_all", event.target.value)}
-          placeholder="mesa, ping pong"
-          value={termInputs.keywords_all}
-        />
-      </label>
-      <label>
-        Frases exactas
-        <input
-          disabled={locked}
-          onChange={(event) => onTermInputChange("exact_phrases", event.target.value)}
-          placeholder="biblioteca de autor"
-          value={termInputs.exact_phrases}
-        />
-      </label>
-      <label>
-        Excluir términos
-        <input
-          disabled={locked}
-          onChange={(event) => onTermInputChange("exclude_keywords", event.target.value)}
-          placeholder="réplica, incompleto"
-          value={termInputs.exclude_keywords}
-        />
-      </label>
-      <label>
-        Categorías aceptadas
-        <input
-          disabled={locked}
-          onChange={(event) => onTermInputChange("categories", event.target.value)}
-          placeholder="libros, literatura"
-          value={termInputs.categories}
-        />
-      </label>
-      <div className="field-grid two">
+      <div className="field-section">
+        <div className="field-section-head">
+          <SectionIcon path={ICON_TERMS} />
+          <h3>Términos de búsqueda</h3>
+        </div>
         <label>
-          Puntaje mínimo
+          Cualquiera de estos términos
           <input
             disabled={locked}
-            min="0"
-            onChange={(event) => update("minimum_score", Number(event.target.value))}
-            type="number"
-            value={profile.minimum_score}
+            onChange={(event) => onTermInputChange("keywords_any", event.target.value)}
+            placeholder="libro, novela, edición"
+            value={termInputs.keywords_any}
           />
         </label>
         <label>
-          Zona horaria
+          Debe incluir todos
           <input
             disabled={locked}
-            onChange={(event) =>
-              update("schedule", { ...profile.schedule, timezone: event.target.value })
-            }
-            value={profile.schedule.timezone}
+            onChange={(event) => onTermInputChange("keywords_all", event.target.value)}
+            placeholder="mesa, ping pong"
+            value={termInputs.keywords_all}
+          />
+        </label>
+        <label>
+          Frases exactas
+          <input
+            disabled={locked}
+            onChange={(event) => onTermInputChange("exact_phrases", event.target.value)}
+            placeholder="biblioteca de autor"
+            value={termInputs.exact_phrases}
+          />
+        </label>
+        <label>
+          Excluir términos
+          <input
+            disabled={locked}
+            onChange={(event) => onTermInputChange("exclude_keywords", event.target.value)}
+            placeholder="réplica, incompleto"
+            value={termInputs.exclude_keywords}
           />
         </label>
       </div>
+      <div className="field-section">
+        <div className="field-section-head">
+          <SectionIcon path={ICON_SCOPE} />
+          <h3>Alcance</h3>
+        </div>
+        <label>
+          Categorías aceptadas
+          <input
+            disabled={locked}
+            onChange={(event) => onTermInputChange("categories", event.target.value)}
+            placeholder="libros, literatura"
+            value={termInputs.categories}
+          />
+        </label>
+        <div className="field-grid two">
+          <label>
+            Puntaje mínimo
+            <input
+              disabled={locked}
+              min="0"
+              onChange={(event) => update("minimum_score", Number(event.target.value))}
+              type="number"
+              value={profile.minimum_score}
+            />
+          </label>
+          <label>
+            Zona horaria
+            <input
+              disabled={locked}
+              onChange={(event) =>
+                update("schedule", { ...profile.schedule, timezone: event.target.value })
+              }
+              value={profile.schedule.timezone}
+            />
+          </label>
+        </div>
+      </div>
       <details>
-        <summary>Boosts y reglas contextuales</summary>
+        <summary>
+          <SectionIcon path={ICON_BOLT} /> Boosts y reglas contextuales
+        </summary>
         <label>
           Boosts (JSON)
           <textarea disabled={locked} onChange={(event) => setBoosts(event.target.value)} value={boosts} />
@@ -337,7 +381,9 @@ function Editor({
         </label>
       </details>
       <div className="panel-heading compact">
-        <h3>Fuentes</h3>
+        <h3>
+          <SectionIcon path={ICON_SOURCES} /> Fuentes
+        </h3>
         <span className="muted">Sólo se consultan las seleccionadas</span>
       </div>
       <div className="source-grid">
@@ -361,7 +407,9 @@ function Editor({
         ))}
       </div>
       <div className="panel-heading compact">
-        <h3>Precio, frecuencia y alertas</h3>
+        <h3>
+          <SectionIcon path={ICON_BOLT} /> Precio, frecuencia y alertas
+        </h3>
       </div>
       <label className="check">
         <input
@@ -482,12 +530,18 @@ function Opportunity({
   state: string;
   onState: (key: string, state: "follow" | "discard" | "restore") => void;
 }) {
+  const ringPct = Math.max(0, Math.min(100, match.score));
   return (
     <article className={`opportunity-card ${state === "dismissed" ? "dismissed" : ""}`}>
       <div className="opportunity-main">
-        <div className="score">
-          {match.score}
-          <small>score</small>
+        <div
+          className="score-ring"
+          style={{ background: `conic-gradient(#1c766f ${ringPct * 3.6}deg, #e5f5f1 0deg)` }}
+        >
+          <div className="score-ring-inner">
+            <strong>{match.score}</strong>
+            <small>score</small>
+          </div>
         </div>
         <div>
           <h3>{match.lot.title}</h3>
@@ -776,6 +830,19 @@ function App() {
     snapshot?.payload.sources.filter((source) => (source.skipped_groups?.length ?? 0) > 0) ?? [];
   const diagnosticSources =
     snapshot?.payload.sources.filter((source) => (source.diagnostics?.length ?? 0) > 0) ?? [];
+  const lastRun = history[0] ?? null;
+  const lastRunLabel = lastRun
+    ? {
+        completed: "completa",
+        partial: "parcial",
+        failed: "falló",
+        queued: "en cola",
+        running: "en curso",
+      }[lastRun.status]
+    : null;
+  const pendingNotifications = notifications.filter(
+    (item) => item.status === "pending" || item.status === "sending",
+  ).length;
 
   return (
     <div className="app-shell">
@@ -802,24 +869,26 @@ function App() {
           + Nueva búsqueda
         </button>
         <p className="eyebrow">PERFILES</p>
-        {loading ? (
-          <p className="muted">Cargando perfiles…</p>
-        ) : (
-          profiles.map((item) => (
-            <button
-              className={`profile-link ${item.profile.id === selectedId ? "selected" : ""}`}
-              key={item.profile.id}
-              onClick={() => {
-                setCreating(false);
-                setSelectedId(item.profile.id);
-                setGuidanceWarnings([]);
-              }}
-            >
-              <span>{item.profile.name}</span>
-              <small>{item.protected ? "Protegido" : item.profile.enabled ? "Activo" : "Pausado"}</small>
-            </button>
-          ))
-        )}
+        <div className="sidebar-profiles">
+          {loading ? (
+            <p className="muted">Cargando perfiles…</p>
+          ) : (
+            profiles.map((item) => (
+              <button
+                className={`profile-link ${item.profile.id === selectedId ? "selected" : ""}`}
+                key={item.profile.id}
+                onClick={() => {
+                  setCreating(false);
+                  setSelectedId(item.profile.id);
+                  setGuidanceWarnings([]);
+                }}
+              >
+                <span>{item.profile.name}</span>
+                <small>{item.protected ? "Protegido" : item.profile.enabled ? "Activo" : "Pausado"}</small>
+              </button>
+            ))
+          )}
+        </div>
       </aside>
       <main className="content">
         <header className="topbar">
@@ -853,6 +922,49 @@ function App() {
         </header>
         {error && <div className="notice error">{error}</div>}
         {message && <div className="notice success">{message}</div>}
+        {selected && !creating && (
+          <div className="status-strip">
+            <div className="status-strip-item">
+              <StatusIcon path={ICON_CLOCK} tone="teal" />
+              <div className="status-strip-text">
+                <div className="status-strip-label">Última corrida</div>
+                <div className="status-strip-value">
+                  {lastRun
+                    ? `${lastRunLabel}${
+                        lastRun.finished_at
+                          ? ` · ${new Date(lastRun.finished_at).toLocaleString()}`
+                          : ""
+                      }`
+                    : "Sin corridas todavía"}
+                </div>
+              </div>
+            </div>
+            <div className="status-strip-item">
+              <StatusIcon path={ICON_CALENDAR} tone="amber" />
+              <div className="status-strip-text">
+                <div className="status-strip-label">Próxima corrida</div>
+                <div className="status-strip-value">
+                  {selected.profile.schedule.enabled && selected.profile.schedule.times.length > 0
+                    ? `${selected.profile.schedule.times.join(", ")} · ${selected.profile.schedule.timezone}`
+                    : "Automatización desactivada"}
+                </div>
+              </div>
+            </div>
+            <div className="status-strip-item">
+              <StatusIcon path={ICON_BELL} tone="green" />
+              <div className="status-strip-text">
+                <div className="status-strip-label">Notificaciones</div>
+                <div className="status-strip-value">
+                  {notifications.length === 0
+                    ? "Sin notificaciones"
+                    : pendingNotifications > 0
+                      ? `${pendingNotifications} pendientes`
+                      : `${notifications.length} entregadas`}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {creating || selected ? (
           <div className="workspace">
             <Editor
