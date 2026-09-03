@@ -2,9 +2,14 @@
 
 ## Release status (as of 0.1.16)
 
-No se cortó ningún tag ni se publicó el add-on todavía. Verificado localmente
-en este entorno (sin Docker disponible, así que no reemplaza una instalación
-real de Supervisor):
+El add-on está publicado e instalado en un Home Assistant real, agregado
+como repositorio de Supervisor (no como add-on local). Confirmado en vivo:
+versión `0.1.16` (`update_available: false`), `state: started`,
+`scheduler_enabled: true`. La instalación supervisada que versiones previas
+de esta nota daban como pendiente ya ocurrió.
+
+Verificado además localmente en este entorno de desarrollo (sin Docker
+disponible, complementario a la instalación real, no un sustituto):
 
 - `pytest`, `ruff check .` y `mypy` en verde; `npm test` y `npm run build` del
   frontend también en verde.
@@ -18,10 +23,10 @@ real de Supervisor):
 - La imagen base (`ghcr.io/home-assistant/base-python:3.12-alpine3.24` en
   `build.yaml`/`Dockerfile`) es la oficial y vigente de Home Assistant.
 
-Sigue pendiente, y sólo puede hacerse fuera de este entorno: una instalación
-supervisada real en un Home Assistant desechable (build de la imagen vía
-Supervisor, alta del add-on, ingress, y una corrida con `scheduler_enabled` y
-`smtp_enabled` en `false`).
+`smtp_enabled` está en `true` en la instalación real, con credenciales de
+Gmail configuradas — a diferencia del default seguro de `config.yaml`
+(`smtp_enabled: false`). Es una elección deliberada post-instalación, no un
+default del proyecto.
 
 ## 0.1.16
 
