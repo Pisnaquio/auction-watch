@@ -1,5 +1,28 @@
 # Changelog
 
+## Release status (as of 0.1.16)
+
+No se cortó ningún tag ni se publicó el add-on todavía. Verificado localmente
+en este entorno (sin Docker disponible, así que no reemplaza una instalación
+real de Supervisor):
+
+- `pytest`, `ruff check .` y `mypy` en verde; `npm test` y `npm run build` del
+  frontend también en verde.
+- `scripts/check_public_safety.py` y el empaquetado (`scripts/package_addon.sh`
+  + `scripts/audit_addon_artifact.py`) pasan sin advertencias.
+- `scripts/validate_addon_options.py` acepta las opciones por defecto de
+  `config.yaml`.
+- Migraciones de Alembic aplicadas de punta a punta contra un `AW_DATA_DIR`
+  nuevo (7 revisiones, sin errores) y el servidor local respondiendo `200` en
+  `/api/v1/health` y `/api/v1/readiness` con la versión `0.1.16`.
+- La imagen base (`ghcr.io/home-assistant/base-python:3.12-alpine3.24` en
+  `build.yaml`/`Dockerfile`) es la oficial y vigente de Home Assistant.
+
+Sigue pendiente, y sólo puede hacerse fuera de este entorno: una instalación
+supervisada real en un Home Assistant desechable (build de la imagen vía
+Supervisor, alta del add-on, ingress, y una corrida con `scheduler_enabled` y
+`smtp_enabled` en `false`).
+
 ## 0.1.16
 
 - Mantiene el texto crudo de los criterios mientras se edita, permitiendo
@@ -122,7 +145,3 @@
   delivery.
 - Safe installation defaults: no scheduled scans and no SMTP delivery.
 - Artifact packaging and private-data audit scripts.
-
-This release has not been published or deployed.  A release still requires a
-maintainer review of the target Home Assistant base images and a supervised
-installation test in a disposable environment.
