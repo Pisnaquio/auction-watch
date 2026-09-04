@@ -1,5 +1,5 @@
 name: Auction Watch
-version: "0.1.16"
+version: "0.1.17"
 slug: auctionwatch
 description: Monitor público de subastas con perfiles independientes
 startup: application
