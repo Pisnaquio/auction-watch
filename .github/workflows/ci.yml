@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -12,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: python scripts/check_release_version.py
       - run: python scripts/check_public_safety.py
       - run: ./scripts/package_addon.sh /tmp/auction-watch-addon.tar.gz
       - uses: actions/setup-python@v5

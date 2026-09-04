@@ -48,6 +48,13 @@ under `/data/auction-watch`, runs migrations before startup, and keeps scans and
 SMTP disabled by default. See [docs/addon.md](docs/addon.md) for installation,
 backup, restoration, and troubleshooting.
 
+## Releases
+
+A release is a version bump merged to `main` followed by a `vX.Y.Z` tag; the
+tag runs [release.yml](.github/workflows/release.yml), which verifies, packages
+and publishes it. How the release then reaches Home Assistant is in
+[docs/RELEASE.md](docs/RELEASE.md).
+
 ## Project boundaries
 
 The project is designed to run as one installable application with multiple
