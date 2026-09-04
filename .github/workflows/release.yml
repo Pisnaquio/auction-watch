@@ -55,6 +55,23 @@ jobs:
             --notes-file dist/notes.md \
             "dist/auction-watch-addon-v$VERSION.tar.gz"
 
+  # Supervisor reads Pisnaquio/auction-watch-ha-addon, not this repo, so a
+  # release is not installable until that mirror carries it. Automating it needs
+  # a token with write access to that repo: set the AW_ADDON_REPO_TOKEN secret
+  # and the repository variable AW_PUBLISH_ADDON_REPO=true. Otherwise the job is
+  # skipped and you run scripts/publish_addon_repo.sh yourself.
+  publish-addon-repo:
+    if: vars.AW_PUBLISH_ADDON_REPO == 'true'
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          GH_TOKEN: ${{ secrets.AW_ADDON_REPO_TOKEN }}
+        run: ./scripts/publish_addon_repo.sh "$GITHUB_REF_NAME" --merge
+
   # Optional: synchronous deploy from a self-hosted runner that can reach the
   # Home Assistant host over SSH (e.g. a Mac on the same LAN). Enable by
   # registering such a runner and setting the repository variable
@@ -62,7 +79,7 @@ jobs:
   # scripts/ha_update.sh) applies the release instead.
   deploy-ha:
     if: vars.AW_HA_DEPLOY == 'true'
-    needs: release
+    needs: publish-addon-repo
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4

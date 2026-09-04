@@ -22,11 +22,13 @@ seguros y no ejecutan trabajos en segundo plano.
 
 ## Actualizaciones
 
-Supervisor ofrece una versión nueva sólo cuando cambia `version:` en
-`config.yaml` del repositorio. Con "Auto update" activado en la página del
-add-on, la aplica solo; si no, **Check for updates → Update** en el store, o
-`scripts/ha_update.sh` por SSH. El proceso completo está en
-[RELEASE.md](RELEASE.md).
+El add-on se distribuye desde
+[`Pisnaquio/auction-watch-ha-addon`](https://github.com/Pisnaquio/auction-watch-ha-addon),
+que es el repositorio a agregar en Supervisor. Ofrece una versión nueva sólo
+cuando cambia `version:` en el `config.yaml` de ese espejo. Con "Auto update"
+activado en la página del add-on, la aplica solo; si no, **Check for updates →
+Update** en el store, o `scripts/ha_update.sh` por SSH. El proceso completo
+está en [RELEASE.md](RELEASE.md).
 
 ## Perfiles
 
