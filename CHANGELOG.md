@@ -28,6 +28,24 @@ Gmail configuradas — a diferencia del default seguro de `config.yaml`
 (`smtp_enabled: false`). Es una elección deliberada post-instalación, no un
 default del proyecto.
 
+## 0.1.17
+
+- Fija la barra lateral a la altura de la ventana: deja de cortarse al
+  desplazar formularios largos y el cambio de perfil queda siempre alcanzable.
+- Agrupa los criterios sueltos en secciones con título e ícono («Términos de
+  búsqueda» y «Alcance»), en línea con las secciones de fuentes y precio.
+- Reemplaza el cuadrado de puntaje de cada oportunidad por un anillo de
+  progreso calculado sobre el puntaje real, y tacha el título de las
+  descartadas.
+- Agrega sobre el espacio de trabajo una franja con la última corrida, la
+  próxima corrida programada y las notificaciones, construida con datos que la
+  interfaz ya tenía y sin endpoints nuevos.
+- Convierte la barra lateral en una barra inferior en pantallas angostas, en
+  lugar de apilar los perfiles como fichas.
+- Incorpora el pipeline de release por tag y las herramientas de versionado
+  (`bump_version.sh`, `tag_release.sh`, `ha_update.sh`); ver
+  [docs/RELEASE.md](docs/RELEASE.md).
+
 ## 0.1.16
 
 - Mantiene el texto crudo de los criterios mientras se edita, permitiendo
