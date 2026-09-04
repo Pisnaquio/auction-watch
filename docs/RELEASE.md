@@ -1,10 +1,17 @@
 # Releases y deploy a Home Assistant
 
-El add-on instalado en Home Assistant es un *repository add-on*: Supervisor lee
-este repo de GitHub directamente y construye la imagen desde `Dockerfile` +
-`config.yaml`. Sólo considera que hay una versión nueva cuando cambia
-`version:` en `config.yaml`. Por eso un release es siempre: **bump de versión →
-merge a `main` → tag `vX.Y.Z`**, y el tag dispara el pipeline.
+**Supervisor no lee este repositorio.** Lee
+[`Pisnaquio/auction-watch-ha-addon`](https://github.com/Pisnaquio/auction-watch-ha-addon),
+un repo de distribución aparte cuyo directorio `auctionwatch/` es un espejo del
+add-on. Ese es el que está registrado como repositorio de add-ons en Home
+Assistant (slug `9b3464ac`), y construye la imagen desde `Dockerfile` +
+`config.yaml`. Supervisor sólo ofrece una versión nueva cuando cambia
+`version:` en el `config.yaml` **del espejo**.
+
+Un release es entonces: **bump de versión → merge a `main` → tag `vX.Y.Z` →
+publicar el espejo → aplicar en Home Assistant**. El tag dispara el pipeline de
+verificación y empaquetado; publicar el espejo es lo que hace la versión
+instalable.
 
 ## Procedimiento
 
@@ -30,6 +37,19 @@ merge a `main` → tag `vX.Y.Z`**, y el tag dispara el pipeline.
    Verifica rama, árbol limpio, sincronía con `origin/main`, consistencia de
    versión y CHANGELOG, y que el tag no exista; recién ahí crea `vX.Y.Z` y lo
    pushea. `--dry-run` sólo corre los chequeos.
+5. Publicar el espejo en el repo de distribución:
+
+   ```bash
+   ./scripts/publish_addon_repo.sh vX.Y.Z          # abre el PR
+   ./scripts/publish_addon_repo.sh vX.Y.Z --merge  # lo abre y lo mergea
+   ```
+
+   Reemplaza `auctionwatch/` con el árbol del tag (así también se propagan los
+   borrados), quita el `repository.yaml` de la app —el repo de distribución
+   publica el suyo— y abre un PR `release: publish Auction Watch X.Y.Z` con las
+   notas del CHANGELOG. `--dry-run` muestra el diff sin tocar nada. **Hasta que
+   este PR se mergea, Home Assistant no ve la versión.**
+6. Aplicarlo en Home Assistant (ver más abajo).
 
 ## Qué hace el pipeline (`.github/workflows/release.yml`)
 
@@ -42,15 +62,21 @@ Se dispara con el push de un tag `vX.Y.Z`:
 3. `release`: `check_public_safety.py`, empaqueta con `package_addon.sh`,
    audita el tarball con `audit_addon_artifact.py` y publica un GitHub Release
    `vX.Y.Z` con las notas del CHANGELOG y el tarball adjunto.
-4. `deploy-ha` (opcional, ver abajo).
+4. `publish-addon-repo` (opcional): corre `publish_addon_repo.sh` contra el repo
+   de distribución. Requiere un token con permiso de escritura sobre
+   `auction-watch-ha-addon` en el secret `AW_ADDON_REPO_TOKEN` y la variable de
+   repositorio `AW_PUBLISH_ADDON_REPO=true`; sin eso el job se saltea y el paso
+   5 del procedimiento se corre a mano.
+5. `deploy-ha` (opcional, ver abajo).
 
 Si cualquier paso falla no se publica nada y Supervisor no ve la versión.
 
 ## Cómo llega a Home Assistant
 
-GitHub Actions corre en la nube y tu Home Assistant está en la LAN, sin
-exposición externa, así que el pipeline no puede empujar el deploy por sí solo.
-Hay tres caminos, de menor a mayor infraestructura:
+Una vez publicado el espejo (paso 5 del procedimiento), falta que Supervisor
+aplique la versión. GitHub Actions corre en la nube y tu Home Assistant está en
+la LAN, sin exposición externa, así que el pipeline no puede empujar el deploy
+por sí solo. Hay tres caminos, de menor a mayor infraestructura:
 
 **A. Auto-update de Supervisor (recomendado, sin infraestructura).** Una sola
 vez, activá el auto-update del add-on:
