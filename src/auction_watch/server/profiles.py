@@ -513,15 +513,9 @@ def get_profile_snapshot(request: Request, profile_id: str) -> dict[str, object]
     profiles, operational = _repositories(request)
     if profiles.get(profile_id) is None:
         raise HTTPException(status_code=404, detail="profile not found")
-    row = operational.latest_snapshot()
+    row = operational.latest_snapshot_for_profile(profile_id)
     if row is None:
         raise HTTPException(status_code=404, detail="snapshot not found")
-    payload = row.payload_json
-    profile_entries = payload.get("profiles") if isinstance(payload, dict) else None
-    if not isinstance(profile_entries, list) or not any(
-        isinstance(item, dict) and item.get("profile_id") == profile_id for item in profile_entries
-    ):
-        raise HTTPException(status_code=404, detail="snapshot not found for profile")
     return _canonical_snapshot_view(row, operational, profile_id)
 
 

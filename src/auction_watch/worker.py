@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Event
 
 from auction_watch.async_ops import NotificationRepository, RunQueueRepository
+from auction_watch.core.identity import encode_opportunity_key
 from auction_watch.notifications.sender import NotificationMessage, NotificationSender
 from auction_watch.notifications.service import NotificationPlanner
 from auction_watch.persistence.operational_repository import OperationalRepository
@@ -48,7 +49,7 @@ class RunWorker:
         job = self.queue.claim_next(now=self.now())
         if job is None:
             return None
-        previous_snapshot = self.operational.latest_snapshot()
+        previous_snapshot = self.operational.latest_snapshot_for_profile(job.profile_id)
         try:
             outcome = self.engine.run(
                 job.profile_id,
@@ -65,7 +66,12 @@ class RunWorker:
                 profile = self.profiles.get(job.profile_id)
                 snapshot = self.operational.snapshot_for_run(job.run_id)
                 if profile is not None:
-                    self.planner.plan(profile, outcome, snapshot, previous_snapshot)
+                    dismissed_keys = frozenset(
+                        encode_opportunity_key(state.source_id, state.auction_id, state.lot_id)
+                        for state in self.operational.user_states((job.profile_id,))
+                        if state.state == "dismissed"
+                    )
+                    self.planner.plan(profile, outcome, snapshot, previous_snapshot, dismissed_keys)
             logger.info(
                 "auction_run_worker_finished",
                 extra={"run_id": job.run_id, "status": outcome.status},

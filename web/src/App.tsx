@@ -621,7 +621,6 @@ function App() {
   }, []);
 
   const loadData = useCallback(async (profileId: string) => {
-    setSnapshot(null);
     try {
       const [runs, mails] = await Promise.all([
         api<Run[]>(`/api/v1/profiles/${encodeURIComponent(profileId)}/runs`),
@@ -635,7 +634,11 @@ function App() {
     try {
       setSnapshot(await api<Snapshot>(`/api/v1/profiles/${encodeURIComponent(profileId)}/snapshot`));
     } catch (reason) {
-      if (reason instanceof Error && !reason.message.includes("snapshot")) setError(reason.message);
+      if (reason instanceof Error && reason.message.includes("snapshot")) {
+        setSnapshot(null);
+      } else if (reason instanceof Error) {
+        setError(reason.message);
+      }
     }
   }, []);
 
@@ -645,15 +648,20 @@ function App() {
 
   useEffect(() => {
     if (selectedId && !creating) {
+      void loadData(selectedId);
+    }
+  }, [creating, loadData, selectedId]);
+
+  useEffect(() => {
+    if (selectedId && !creating) {
       const profile = copy(
         profiles.find((item) => item.profile.id === selectedId)?.profile ?? emptyProfile(),
       );
       setDraft(profile);
       setTermInputs(termInputsFromProfile(profile));
       setGuidanceWarnings([]);
-      void loadData(selectedId);
     }
-  }, [creating, loadData, profiles, selectedId]);
+  }, [creating, profiles, selectedId]);
 
   const updateDraft = <K extends keyof Profile>(key: K, value: Profile[K]) => {
     setGuidanceWarnings([]);
@@ -795,6 +803,32 @@ function App() {
     }
   }
 
+  async function deleteProfile() {
+    if (!selected || selected.protected) return;
+    if (!window.confirm(`¿Borrar la búsqueda "${selected.profile.name}"? Esta acción no se puede deshacer.`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api(
+        `/api/v1/profiles/${encodeURIComponent(selected.profile.id)}?expected_revision=${selected.revision}`,
+        { method: "DELETE" },
+      );
+      const remaining = profiles.filter((item) => item.profile.id !== selected.profile.id);
+      setProfiles(remaining);
+      setSelectedId(remaining[0]?.profile.id ?? null);
+      setSnapshot(null);
+      setHistory([]);
+      setNotifications([]);
+      setMessage("Búsqueda borrada.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo borrar la búsqueda");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function setState(key: string, state: "follow" | "discard" | "restore") {
     if (!selected) return;
     const existing = snapshot?.payload.user_states.find((item) => item.opportunity_key === key);
@@ -916,6 +950,11 @@ function App() {
                 <button className="button secondary" disabled={busy} onClick={() => void toggleProfile()}>
                   {selected.profile.enabled ? "Pausar" : "Reanudar"}
                 </button>
+                {!selected.protected && (
+                  <button className="button danger-ghost" disabled={busy} onClick={() => void deleteProfile()}>
+                    Borrar búsqueda
+                  </button>
+                )}
               </>
             )}
           </div>
