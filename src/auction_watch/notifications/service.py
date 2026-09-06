@@ -44,6 +44,7 @@ class NotificationPlanner:
         outcome: RunOutcome,
         snapshot: Any,
         previous_snapshot: Any,
+        dismissed_keys: frozenset[str] = frozenset(),
     ) -> NotificationOutboxRecord | None:
         mode = profile.profile.notification_mode
         if mode == "disabled" or not self.enabled:
@@ -80,6 +81,12 @@ class NotificationPlanner:
                     for item in previous
                     if item.get("opportunity_key") not in current_keys
                 )
+            if dismissed_keys:
+                changed_matches = [
+                    item
+                    for item in changed_matches
+                    if item.get("opportunity_key") not in dismissed_keys
+                ]
             notification_type = "matches"
         if outcome.status == "failed":
             if mode != "matches_or_failure":

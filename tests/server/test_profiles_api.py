@@ -8,7 +8,13 @@ from fastapi.testclient import TestClient
 from auction_watch.config import Settings
 from auction_watch.core.identity import encode_opportunity_key
 from auction_watch.main import create_app
-from auction_watch.persistence.contracts import GroupRecord, LotRecord, RunRecord, SourceRecord
+from auction_watch.persistence.contracts import (
+    GroupRecord,
+    LotRecord,
+    RunProfileRecord,
+    RunRecord,
+    SourceRecord,
+)
 from auction_watch.persistence.database import Database
 from auction_watch.persistence.operational_repository import OperationalRepository
 from auction_watch.runner import RunOutcome
@@ -58,6 +64,14 @@ class FakeRunEngine:
             self.operational.update_run(
                 existing.model_copy(update={"status": "completed", "finished_at": now})
             )
+        self.operational.record_run_profile(
+            RunProfileRecord(
+                run_id=request_id or "fake-run",
+                profile_id=profile_id,
+                revision=1,
+                position=0,
+            )
+        )
         return RunOutcome(request_id or "fake-run", "completed", None, None)
 
 

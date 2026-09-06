@@ -734,3 +734,24 @@ class OperationalRepository:
                 .order_by(AuctionSnapshotRow.published_at.desc())
                 .limit(1)
             )
+
+    def latest_snapshot_for_profile(self, profile_id: str) -> AuctionSnapshotRow | None:
+        """Return the latest published snapshot that actually covers ``profile_id``.
+
+        ``latest_snapshot`` picks the newest snapshot system-wide, which is wrong
+        as soon as another profile runs after this one: that snapshot's payload
+        has no entry for this profile, so callers must scope the lookup through
+        ``run_profiles`` instead.
+        """
+
+        with self._database.sessions.begin() as session:
+            return session.scalar(
+                select(AuctionSnapshotRow)
+                .join(RunProfileRow, RunProfileRow.run_id == AuctionSnapshotRow.run_id)
+                .where(
+                    RunProfileRow.profile_id == profile_id,
+                    AuctionSnapshotRow.published_at.is_not(None),
+                )
+                .order_by(AuctionSnapshotRow.published_at.desc())
+                .limit(1)
+            )
