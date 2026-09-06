@@ -6,6 +6,21 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.18
+
+- Corrige el snapshot de oportunidades de un perfil, que tomaba el último
+  publicado en todo el sistema en vez del propio: en cuanto corría otro
+  perfil, la vista dejaba de encontrar resultados y parecía quedarse cargando.
+- Corrige el conteo de "oportunidades nuevas" del mail de notificaciones, que
+  comparaba contra ese mismo snapshot equivocado e ignoraba el estado de
+  descarte, así que informaba como abiertas subastas ya descartadas.
+- Las oportunidades descartadas ya no vuelven a listarse como disponibles
+  tras una corrida nueva.
+- Agrega el botón para borrar una búsqueda guardada en la interfaz (el
+  endpoint ya existía, pero nada lo llamaba).
+- Elimina el parpadeo de "cargando" que se disparaba en cada cambio de
+  perfil, corrida o acción sobre una oportunidad.
+
 ## 0.1.17
 
 - Fija la barra lateral a la altura de la ventana: deja de cortarse al
