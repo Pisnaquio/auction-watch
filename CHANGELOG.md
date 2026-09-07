@@ -6,6 +6,13 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.19
+
+- Corrige el borrado de búsquedas guardadas con historial: ahora elimina en una
+  transacción sus referencias exclusivas y conserva las corridas compartidas.
+- Si una búsqueda está en cola o en ejecución, el borrado responde un conflicto
+  claro en vez de interrumpir la corrida o devolver un error interno.
+
 ## 0.1.18
 
 - Corrige el snapshot de oportunidades de un perfil, que tomaba el último
