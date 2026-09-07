@@ -6,6 +6,15 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.20
+
+- Corrige que la interfaz dejara de esperar una corrida a los 75 segundos:
+  Castells suele tardar más que eso, así que "Actualizar ahora" quedaba
+  trabado en "Consultando…" con un error, aunque la corrida terminara bien
+  segundos después del lado del servidor. El límite de espera del cliente
+  ahora acompaña el de 5 minutos del servidor, y si igual se llega a superar,
+  la interfaz se recupera sola en vez de quedar congelada.
+
 ## 0.1.19
 
 - Corrige el borrado de búsquedas guardadas con historial: ahora elimina en una
