@@ -46,7 +46,14 @@ type Match = {
   opportunity_key: string;
   score: number;
   matched_terms: string[];
-  lot: { title: string; description: string; price_label: string; lot_url: string };
+  lot: {
+    auction_id: string;
+    title: string;
+    description: string;
+    price_label: string;
+    lot_url: string;
+    closing_at: string | null;
+  };
 };
 type Snapshot = {
   payload: {
@@ -142,6 +149,32 @@ const termInputsFromProfile = (profile: Profile): TermInputs => ({
   categories: join(profile.categories),
   schedule_times: join(profile.schedule.times),
 });
+
+function dateKey(date: Date, timezone: string): string | null {
+  if (Number.isNaN(date.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const value = Object.fromEntries(
+      parts
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+    return `${value.year}-${value.month}-${value.day}`;
+  } catch {
+    return null;
+  }
+}
+
+function closesToday(closingAt: string | null, timezone: string): boolean {
+  if (!closingAt) return false;
+  const today = dateKey(new Date(), timezone);
+  return today !== null && dateKey(new Date(closingAt), timezone) === today;
+}
 
 function emptyProfile(): Profile {
   return {
@@ -859,6 +892,22 @@ function App() {
       snapshot?.payload.profiles.find((item) => item.profile_id === selectedId)?.matches ?? [],
     [selectedId, snapshot],
   );
+  const todayClosingMatches = useMemo(() => {
+    const dismissed = new Set(
+      (snapshot?.payload.user_states ?? [])
+        .filter((state) => state.state === "dismissed")
+        .map((state) => state.opportunity_key),
+    );
+    return matches.filter(
+      (match) =>
+        !dismissed.has(match.opportunity_key) &&
+        closesToday(match.lot.closing_at, selected?.profile.schedule.timezone ?? "UTC"),
+    );
+  }, [matches, selected?.profile.schedule.timezone, snapshot?.payload.user_states]);
+  const todayClosingAuctionCount = useMemo(
+    () => new Set(todayClosingMatches.map((match) => match.lot.auction_id)).size,
+    [todayClosingMatches],
+  );
   const authoritative =
     snapshot?.payload.sources.every(
       (source) => source.status === "complete" && source.inventory_authoritative,
@@ -1044,6 +1093,20 @@ function App() {
                       : "Actualizar ahora"}
                 </button>
               </div>
+              {todayClosingAuctionCount > 0 && (
+                <div className="coverage-warning urgent">
+                  <strong>
+                    {todayClosingAuctionCount === 1
+                      ? "1 subasta de esta búsqueda cierra hoy"
+                      : `${todayClosingAuctionCount} subastas de esta búsqueda cierran hoy`}
+                  </strong>
+                  <span>
+                    {todayClosingMatches.length === 1
+                      ? "1 lote encontrado con cierre previsto para hoy."
+                      : `${todayClosingMatches.length} lotes encontrados con cierre previsto para hoy.`}
+                  </span>
+                </div>
+              )}
               {snapshot && !authoritative && (
                 <div className="coverage-warning">
                   <strong>Cobertura parcial</strong>
