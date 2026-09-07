@@ -14,7 +14,15 @@ from sqlalchemy.orm import Session
 
 from auction_watch.core.models import ContextRule, PriceFilter, SearchProfile, SearchSchedule
 from auction_watch.persistence.database import Database
-from auction_watch.persistence.models import ProfileRow, ProfileSourceRow
+from auction_watch.persistence.models import (
+    NotificationOutboxRow,
+    ProfileMatchRow,
+    ProfileRow,
+    ProfileSourceRow,
+    RunProfileRow,
+    RunQueueRow,
+    UserOpportunityStateRow,
+)
 
 
 class ProfileRepositoryError(RuntimeError):
@@ -43,6 +51,10 @@ class SystemProfileDeleteError(ProfileRepositoryError):
 
 class ProfilePersistenceError(ProfileRepositoryError):
     """Raised when SQLite rejects a non-conflict profile write."""
+
+
+class ProfileRunInProgressError(ProfileRepositoryError):
+    """Raised when a profile still owns a queued or running search."""
 
 
 @dataclass(frozen=True)
@@ -281,7 +293,32 @@ class ProfileRepository:
             current = session.get(ProfileRow, profile_id)
             if current is not None and current.kind == "system":
                 raise SystemProfileDeleteError(profile_id)
+            active_run = session.scalar(
+                select(RunQueueRow.id).where(
+                    RunQueueRow.profile_id == profile_id,
+                    RunQueueRow.status.in_(("queued", "running")),
+                )
+            )
+            if active_run is not None:
+                raise ProfileRunInProgressError(profile_id)
             try:
+                # Runs may be shared by multiple profiles, so retain their historical
+                # records and delete only the rows that belong to this profile.
+                session.execute(
+                    delete(NotificationOutboxRow).where(
+                        NotificationOutboxRow.profile_id == profile_id
+                    )
+                )
+                session.execute(
+                    delete(UserOpportunityStateRow).where(
+                        UserOpportunityStateRow.profile_id == profile_id
+                    )
+                )
+                session.execute(
+                    delete(ProfileMatchRow).where(ProfileMatchRow.profile_id == profile_id)
+                )
+                session.execute(delete(RunQueueRow).where(RunQueueRow.profile_id == profile_id))
+                session.execute(delete(RunProfileRow).where(RunProfileRow.profile_id == profile_id))
                 result = cast(
                     CursorResult[tuple[object, ...]],
                     session.execute(
@@ -294,6 +331,8 @@ class ProfileRepository:
             except OperationalError as exc:
                 if "locked" in str(exc).lower():
                     raise ProfileRevisionConflictError(profile_id) from None
+                raise ProfilePersistenceError("profile delete failed") from exc
+            except IntegrityError as exc:
                 raise ProfilePersistenceError("profile delete failed") from exc
             if result.rowcount == 1:
                 return

@@ -24,6 +24,7 @@ from auction_watch.persistence.repository import (
     ProfilePersistenceError,
     ProfileRepository,
     ProfileRevisionConflictError,
+    ProfileRunInProgressError,
     StoredProfile,
     SystemProfileDeleteError,
     SystemProfileImmutableError,
@@ -171,6 +172,8 @@ def _raise_profile_error(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=409, detail="profile already exists") from exc
     if isinstance(exc, ProfileRevisionConflictError):
         raise HTTPException(status_code=409, detail="profile revision is stale") from exc
+    if isinstance(exc, ProfileRunInProgressError):
+        raise HTTPException(status_code=409, detail="profile has a search in progress") from exc
     if isinstance(exc, (SystemProfileImmutableError, SystemProfileDeleteError)):
         raise HTTPException(status_code=403, detail="protected profile cannot be changed") from exc
     if isinstance(exc, (RunLeaseBusyError, UserStateRevisionConflict)):
