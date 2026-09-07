@@ -5,7 +5,7 @@ import sqlite3
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Event
@@ -19,7 +19,7 @@ from auction_watch.config import Settings
 from auction_watch.main import create_app
 from auction_watch.persistence.database import Database, sqlite_path
 from auction_watch.persistence.migrations import alembic_head, upgrade_head
-from auction_watch.persistence.models import ProfileSourceRow
+from auction_watch.persistence.models import ProfileSourceRow, RunProfileRow, RunRow
 from auction_watch.persistence.repository import (
     ProfileAlreadyExistsError,
     ProfileNotFoundError,
@@ -371,6 +371,40 @@ def test_profile_sources_cascade_on_delete(database: Database) -> None:
         ).scalar_one()
     assert before == 3
     assert after == 0
+
+
+def test_profile_delete_removes_only_profile_scoped_history(database: Database) -> None:
+    repository = ProfileRepository(database)
+    created = repository.create(make_profile())
+    now = datetime.now(UTC)
+    with database.sessions.begin() as session:
+        session.add(
+            RunRow(
+                run_id="completed-run",
+                status="completed",
+                started_at=now,
+                finished_at=now,
+                error=None,
+                trigger="manual",
+                selected_sources=[],
+            )
+        )
+        session.flush()
+        session.add(
+            RunProfileRow(
+                run_id="completed-run",
+                profile_id=created.profile.id,
+                revision=created.revision,
+                position=0,
+            )
+        )
+
+    repository.delete(created.profile.id, expected_revision=created.revision)
+
+    with database.engine.connect() as connection:
+        assert connection.scalar(select(func.count()).select_from(RunRow.__table__)) == 1
+        assert connection.scalar(select(func.count()).select_from(RunProfileRow.__table__)) == 0
+    assert repository.get(created.profile.id) is None
 
 
 def test_restart_engine_preserves_profiles(tmp_path: Path) -> None:

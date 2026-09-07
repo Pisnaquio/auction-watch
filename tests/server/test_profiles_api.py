@@ -16,6 +16,7 @@ from auction_watch.persistence.contracts import (
     SourceRecord,
 )
 from auction_watch.persistence.database import Database
+from auction_watch.persistence.models import RunProfileRow, RunRow
 from auction_watch.persistence.operational_repository import OperationalRepository
 from auction_watch.runner import RunOutcome
 
@@ -131,6 +132,39 @@ def test_profile_api_protects_seed_and_supports_editable_crud(tmp_path: Path) ->
         )
         assert clone.status_code == 201
         assert clone.json()["protected"] is False
+
+
+def test_profile_api_deletes_a_profile_with_completed_history(tmp_path: Path) -> None:
+    application = create_app(Settings(data_dir=tmp_path, worker_enabled=False))
+    with TestClient(application) as client:
+        created = client.post("/api/v1/profiles", json={"profile": profile_payload("colores")})
+        assert created.status_code == 201
+        now = datetime.now(UTC)
+        with application.state.database.sessions.begin() as session:
+            session.add(
+                RunRow(
+                    run_id="completed-colores",
+                    status="completed",
+                    started_at=now,
+                    finished_at=now,
+                    error=None,
+                    trigger="manual",
+                    selected_sources=[],
+                )
+            )
+            session.flush()
+            session.add(
+                RunProfileRow(
+                    run_id="completed-colores",
+                    profile_id="colores",
+                    revision=1,
+                    position=0,
+                )
+            )
+
+        deleted = client.delete("/api/v1/profiles/colores?expected_revision=1")
+        assert deleted.status_code == 204
+        assert client.get("/api/v1/profiles/colores").status_code == 404
 
 
 def test_search_guide_and_warnings_are_visible_and_non_destructive(tmp_path: Path) -> None:
