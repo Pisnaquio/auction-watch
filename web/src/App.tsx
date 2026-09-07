@@ -756,7 +756,10 @@ function App() {
       });
       setRun(current);
       setMessage("Corrida encolada…");
-      const deadline = Date.now() + 75000;
+      // Some sources (Castells in particular) can regularly take over a
+      // minute; keep polling close to the backend's own run lease (5 min)
+      // instead of giving up early and leaving the button stuck mid-run.
+      const deadline = Date.now() + 280000;
       while (current.status === "queued" || current.status === "running") {
         if (Date.now() >= deadline) throw new Error("timeout");
         await new Promise((resolve) => window.setTimeout(resolve, 500));
@@ -776,11 +779,15 @@ function App() {
       setMessage(null);
       setError(
         reason instanceof Error && reason.message === "timeout"
-          ? "La corrida sigue en curso; podés reintentar de forma segura."
+          ? "La corrida sigue en curso del lado del servidor; se va a reflejar sola cuando termine."
           : reason instanceof Error
             ? reason.message
             : "La corrida falló",
       );
+      // Unstick the button either way: a stale "queued"/"running" run here
+      // would otherwise disable "Actualizar ahora" forever.
+      setRun(null);
+      await loadData(selected.profile.id);
     }
   }
 
