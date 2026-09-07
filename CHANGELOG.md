@@ -6,6 +6,12 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.21
+
+- Agrega un aviso en el panel de oportunidades que marca cuántas subastas de
+  esa búsqueda cierran hoy, calculado en la zona horaria de la propia búsqueda
+  y sin contar lo que ya descartaste.
+
 ## 0.1.20
 
 - Corrige que la interfaz dejara de esperar una corrida a los 75 segundos:
