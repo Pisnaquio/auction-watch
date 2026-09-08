@@ -6,6 +6,12 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.22
+
+- Agrega un aviso arriba de todo, visible sin importar qué búsqueda tengas
+  abierta, que junta las subastas que cierran hoy en todas tus búsquedas
+  activas (no solo la que estás mirando) y las lista con un link directo.
+
 ## 0.1.21
 
 - Agrega un aviso en el panel de oportunidades que marca cuántas subastas de
