@@ -55,6 +55,15 @@ type Match = {
     closing_at: string | null;
   };
 };
+type ClosingTodayItem = {
+  profileId: string;
+  profileName: string;
+  opportunityKey: string;
+  auctionGroupKey: string;
+  title: string;
+  lotUrl: string;
+  closingAt: string;
+};
 type Snapshot = {
   payload: {
     run: { run_id: string; status: string };
@@ -630,7 +639,51 @@ function App() {
   const [guideLoading, setGuideLoading] = useState(false);
   const [guide, setGuide] = useState<SearchGuideData | null>(null);
   const [runtime, setRuntime] = useState<RuntimeState | null>(null);
+  const [closingTodayAll, setClosingTodayAll] = useState<ClosingTodayItem[]>([]);
+  const [closingTodayAllOpen, setClosingTodayAllOpen] = useState(false);
   const selected = profiles.find((item) => item.profile.id === selectedId) ?? null;
+
+  const refreshClosingTodayAll = useCallback(async (list: ProfileView[]) => {
+    const items: ClosingTodayItem[] = [];
+    await Promise.all(
+      list
+        .filter((item) => item.profile.enabled)
+        .map(async (item) => {
+          let snap: Snapshot;
+          try {
+            snap = await api<Snapshot>(
+              `/api/v1/profiles/${encodeURIComponent(item.profile.id)}/snapshot`,
+            );
+          } catch {
+            return;
+          }
+          const dismissed = new Set(
+            snap.payload.user_states
+              .filter((state) => state.state === "dismissed")
+              .map((state) => state.opportunity_key),
+          );
+          const timezone = item.profile.schedule.timezone || "UTC";
+          const profileMatches =
+            snap.payload.profiles.find((entry) => entry.profile_id === item.profile.id)
+              ?.matches ?? [];
+          for (const match of profileMatches) {
+            if (dismissed.has(match.opportunity_key)) continue;
+            if (!closesToday(match.lot.closing_at, timezone)) continue;
+            items.push({
+              profileId: item.profile.id,
+              profileName: item.profile.name,
+              opportunityKey: match.opportunity_key,
+              auctionGroupKey: match.opportunity_key.split(":").slice(0, 3).join(":"),
+              title: match.lot.title,
+              lotUrl: match.lot.lot_url,
+              closingAt: match.lot.closing_at ?? "",
+            });
+          }
+        }),
+    );
+    items.sort((a, b) => a.closingAt.localeCompare(b.closingAt));
+    setClosingTodayAll(items);
+  }, []);
 
   const loadProfiles = useCallback(async () => {
     setLoading(true);
@@ -646,12 +699,13 @@ function App() {
           ? current
           : (result[0]?.profile.id ?? null),
       );
+      void refreshClosingTodayAll(result);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudieron cargar los perfiles");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [refreshClosingTodayAll]);
 
   const loadData = useCallback(async (profileId: string) => {
     try {
@@ -808,6 +862,7 @@ function App() {
             : "La corrida falló.",
       );
       await loadData(selected.profile.id);
+      void refreshClosingTodayAll(profiles);
     } catch (reason) {
       setMessage(null);
       setError(
@@ -821,6 +876,7 @@ function App() {
       // would otherwise disable "Actualizar ahora" forever.
       setRun(null);
       await loadData(selected.profile.id);
+      void refreshClosingTodayAll(profiles);
     }
   }
 
@@ -862,6 +918,7 @@ function App() {
       setHistory([]);
       setNotifications([]);
       setMessage("Búsqueda borrada.");
+      void refreshClosingTodayAll(remaining);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo borrar la búsqueda");
     } finally {
@@ -882,6 +939,7 @@ function App() {
         }),
       });
       await loadData(selected.profile.id);
+      void refreshClosingTodayAll(profiles);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo actualizar la oportunidad");
     }
@@ -981,6 +1039,39 @@ function App() {
         </div>
       </aside>
       <main className="content">
+        {closingTodayAll.length > 0 && (
+          <div className="global-closing-today">
+            <StatusIcon path={ICON_CLOCK} tone="amber" />
+            <span>
+              {(() => {
+                const auctionCount = new Set(
+                  closingTodayAll.map((item) => item.auctionGroupKey),
+                ).size;
+                return auctionCount === 1
+                  ? "1 subasta cierra hoy en tus búsquedas"
+                  : `${auctionCount} subastas cierran hoy en tus búsquedas`;
+              })()}
+            </span>
+            <button
+              className="global-closing-today-toggle"
+              onClick={() => setClosingTodayAllOpen((open) => !open)}
+            >
+              {closingTodayAllOpen ? "Ocultar" : "Ver"}
+            </button>
+            {closingTodayAllOpen && (
+              <ul className="global-closing-today-list">
+                {closingTodayAll.map((item) => (
+                  <li key={item.opportunityKey}>
+                    <span className="global-closing-today-profile">{item.profileName}</span>
+                    <a href={item.lotUrl} rel="noreferrer" target="_blank">
+                      {item.title}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <header className="topbar">
           <div>
             <p className="eyebrow">MONITOR DE OPORTUNIDADES</p>
