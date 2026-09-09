@@ -742,6 +742,7 @@ function App() {
   const [closingTodayAll, setClosingTodayAll] = useState<ClosingTodayItem[]>([]);
   const [closingTodayAllOpen, setClosingTodayAllOpen] = useState(false);
   const [tab, setTab] = useState<OpportunityTab>("todas");
+  const [coverageOpen, setCoverageOpen] = useState(false);
   const selected = profiles.find((item) => item.profile.id === selectedId) ?? null;
 
   const refreshClosingTodayAll = useCallback(async (list: ProfileView[]) => {
@@ -1137,6 +1138,22 @@ function App() {
     snapshot?.payload.sources.filter((source) => (source.skipped_groups?.length ?? 0) > 0) ?? [];
   const diagnosticSources =
     snapshot?.payload.sources.filter((source) => (source.diagnostics?.length ?? 0) > 0) ?? [];
+  const coverageNotes = [
+    degradedSources.length > 0 &&
+      degradedSources.map((source) => sourceNames[source.source_id] ?? source.source_id).join(", "),
+    skippedSources.length > 0 &&
+      `${skippedSources.reduce(
+        (total, source) => total + (source.skipped_groups?.length ?? 0),
+        0,
+      )} remates omitidos`,
+    diagnosticSources.length > 0 &&
+      `${diagnosticSources.reduce(
+        (total, source) =>
+          total +
+          (source.diagnostics?.filter((item) => item.status === "shadow_only").length ?? 0),
+        0,
+      )} en sombra`,
+  ].filter((note): note is string => typeof note === "string" && note.length > 0);
   const lastRun = history[0] ?? null;
   const lastRunLabel = lastRun
     ? {
@@ -1357,52 +1374,74 @@ function App() {
                   </span>
                 </div>
               )}
-              {snapshot && !authoritative && (
-                <div className="coverage-warning">
-                  <strong>Cobertura parcial</strong>
-                  <span>No se interpreta como “sin resultados”.</span>
-                  {degradedSources.map((source) => (
-                    <small key={source.source_id}>
-                      {sourceNames[source.source_id] ?? source.source_id}: {source.status}
-                      {source.errors.length > 0 ? ` — ${source.errors.join("; ")}` : ""}
-                    </small>
-                  ))}
-                </div>
-              )}
-              {snapshot && skippedSources.length > 0 && (
-                <div className="coverage-warning">
-                  <strong>Remates descartados por título</strong>
-                  <span>
-                    Se omitieron únicamente grupos inequívocamente artísticos antes de consultar
-                    sus lotes.
-                  </span>
-                  {skippedSources.map((source) => (
-                    <small key={source.source_id}>
-                      {sourceNames[source.source_id] ?? source.source_id}: {source.skipped_groups?.length ?? 0}
-                    </small>
-                  ))}
-                </div>
-              )}
-              {snapshot && diagnosticSources.length > 0 && (
-                <div className="coverage-warning">
-                  <strong>Decodificación adaptativa</strong>
-                  <span>
-                    Sólo los envelopes inequívocos se publican; los demás quedan en sombra.
-                  </span>
-                  {diagnosticSources.map((source) => {
-                    const recovered =
-                      source.diagnostics?.filter((item) => item.status === "adaptive_recovered")
-                        .length ?? 0;
-                    const shadow =
-                      source.diagnostics?.filter((item) => item.status === "shadow_only").length ??
-                      0;
-                    return (
-                      <small key={source.source_id}>
-                        {sourceNames[source.source_id] ?? source.source_id}: {recovered} recuperados,
-                        {" "}{shadow} en sombra
-                      </small>
-                    );
-                  })}
+              {snapshot && coverageNotes.length > 0 && (
+                <div className={`coverage-note${authoritative ? "" : " degraded"}`}>
+                  <button
+                    className="coverage-note-head"
+                    onClick={() => setCoverageOpen((open) => !open)}
+                  >
+                    <span className="coverage-note-summary">
+                      {authoritative ? "Cobertura completa" : "Cobertura parcial"}
+                      {coverageNotes.length > 0 && ` · ${coverageNotes.join(" · ")}`}
+                    </span>
+                    <span className="coverage-note-toggle">
+                      {coverageOpen ? "Ocultar" : "Ver detalle"}
+                    </span>
+                  </button>
+                  {coverageOpen && (
+                    <div className="coverage-note-body">
+                      {!authoritative && (
+                        <>
+                          <strong>Cobertura parcial</strong>
+                          <span>No se interpreta como “sin resultados”.</span>
+                          {degradedSources.map((source) => (
+                            <small key={source.source_id}>
+                              {sourceNames[source.source_id] ?? source.source_id}: {source.status}
+                              {source.errors.length > 0 ? ` — ${source.errors.join("; ")}` : ""}
+                            </small>
+                          ))}
+                        </>
+                      )}
+                      {skippedSources.length > 0 && (
+                        <>
+                          <strong>Remates descartados por título</strong>
+                          <span>
+                            Se omitieron únicamente grupos inequívocamente artísticos antes de
+                            consultar sus lotes.
+                          </span>
+                          {skippedSources.map((source) => (
+                            <small key={source.source_id}>
+                              {sourceNames[source.source_id] ?? source.source_id}:{" "}
+                              {source.skipped_groups?.length ?? 0}
+                            </small>
+                          ))}
+                        </>
+                      )}
+                      {diagnosticSources.length > 0 && (
+                        <>
+                          <strong>Decodificación adaptativa</strong>
+                          <span>
+                            Sólo los envelopes inequívocos se publican; los demás quedan en sombra.
+                          </span>
+                          {diagnosticSources.map((source) => {
+                            const recovered =
+                              source.diagnostics?.filter(
+                                (item) => item.status === "adaptive_recovered",
+                              ).length ?? 0;
+                            const shadow =
+                              source.diagnostics?.filter((item) => item.status === "shadow_only")
+                                .length ?? 0;
+                            return (
+                              <small key={source.source_id}>
+                                {sourceNames[source.source_id] ?? source.source_id}: {recovered}{" "}
+                                recuperados, {shadow} en sombra
+                              </small>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               {snapshot && (
