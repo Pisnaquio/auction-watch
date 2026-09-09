@@ -6,6 +6,14 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.24
+
+- Muestra la foto del lote en cada oportunidad, cuando la fuente la publica.
+- Muestra la fecha de cierre en cada tarjeta, resaltada cuando cierra hoy: antes
+  la lista se ordenaba por cierre sin mostrar nunca esa fecha.
+- Las subastas cuya fecha de cierre ya pasó dejan de anunciarse como si fueran a
+  cerrar y pasan al final de la lista, en vez de encabezarla.
+
 ## 0.1.23
 
 - Separa las oportunidades en solapas con contador: «Todas», «Nuevas»,
