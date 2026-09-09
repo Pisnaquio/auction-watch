@@ -95,7 +95,9 @@ def test_sqlite_pragmas_are_configured(database: Database) -> None:
 
     assert foreign_keys == 1
     assert str(journal_mode).lower() == "wal"
-    assert busy_timeout == 5000
+    # Must outlast a full scan holding the single writer, or a user action
+    # taken mid-run fails instead of waiting its turn.
+    assert busy_timeout >= 30000
     assert synchronous == 1
 
 

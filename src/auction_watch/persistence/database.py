@@ -36,7 +36,10 @@ def create_sqlite_engine(data_dir: Path) -> Engine:
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=5000")
+            # A scan writes thousands of lots and can hold the single SQLite
+            # writer for longer than a few seconds. Five was short enough that
+            # dismissing a lot mid-run failed outright instead of waiting.
+            cursor.execute("PRAGMA busy_timeout=30000")
             cursor.execute("PRAGMA synchronous=NORMAL")
         finally:
             cursor.close()
