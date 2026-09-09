@@ -92,6 +92,19 @@ class OpportunityStateRequest(BaseModel):
         return value
 
 
+class IgnoredAuctionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    patterns: list[str] = Field(default_factory=list, max_length=200)
+
+    @field_validator("patterns")
+    @classmethod
+    def validate_patterns(cls, value: list[str]) -> list[str]:
+        if any(len(item.strip()) > 256 for item in value):
+            raise ValueError("ignored auction pattern is too long")
+        return value
+
+
 class NotificationModeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -289,6 +302,23 @@ def get_search_guide() -> dict[str, object]:
 @router.post("/search-guidance")
 def get_search_guidance(body: SearchGuidanceRequest) -> dict[str, object]:
     return {"warnings": list(profile_warnings(body.profile))}
+
+
+@router.get("/ignored-auctions")
+def list_ignored_auctions(request: Request) -> dict[str, object]:
+    _, operational = _repositories(request)
+    return {"patterns": list(operational.ignored_auction_titles())}
+
+
+@router.put("/ignored-auctions")
+def replace_ignored_auctions(
+    request: Request, body: IgnoredAuctionsRequest
+) -> dict[str, object]:
+    """Replace the list of auction titles that must never be scanned."""
+
+    _, operational = _repositories(request)
+    stored = operational.replace_ignored_auction_titles(tuple(body.patterns))
+    return {"patterns": list(stored)}
 
 
 @router.get("/profiles")

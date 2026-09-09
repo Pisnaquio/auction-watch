@@ -38,6 +38,9 @@ from auction_watch.sources.transport import HttpxTransport, Transport
 
 logger = logging.getLogger(__name__)
 LEASE_TTL = timedelta(minutes=5)
+# A lot no source has confirmed for this long stops being presented as available,
+# whatever the reason we lost sight of it.
+STALE_LOT_TTL = timedelta(hours=48)
 MAX_PARALLEL_SOURCES = 5
 SCHEDULE_GRACE = timedelta(minutes=15)
 
@@ -217,6 +220,20 @@ class AuctionRunEngine:
     ) -> RunOutcome:
         results: dict[str, SourceScanResult] = {}
         try:
+            # Before anything reads the prior inventory: lots nobody has been
+            # able to confirm for two days are retired, so neither the stability
+            # quarantine nor the matcher keeps reasoning about auctions that
+            # ended days ago.
+            retired = self.operational.retire_stale_lots(
+                source_ids,
+                run_id=run.run_id,
+                cutoff=self.now().astimezone(UTC) - STALE_LOT_TTL,
+            )
+            if retired:
+                logger.info(
+                    "auction_stale_lots_retired",
+                    extra={"run_id": run.run_id, "count": retired},
+                )
             specs = self.sources.select(source_ids)
             with ThreadPoolExecutor(max_workers=min(len(specs), MAX_PARALLEL_SOURCES)) as executor:
                 futures = {
@@ -244,7 +261,15 @@ class AuctionRunEngine:
                         extra={"run_id": run.run_id, "source_id": spec.source_id},
                     )
 
-            lots = self.operational.active_lots(source_ids)
+            # Sources keep listing lots long after their auction closed, and
+            # reconciliation cannot retire them while they are still published.
+            # They are not opportunities, so they never reach the matcher.
+            closed_before = self.now().astimezone(UTC)
+            lots = [
+                lot
+                for lot in self.operational.active_lots(source_ids)
+                if lot.closing_at is None or lot.closing_at > closed_before
+            ]
             for stored in stored_profiles:
                 expected: set[tuple[str, str, str]] = set()
                 for lot in lots:
@@ -311,7 +336,11 @@ class AuctionRunEngine:
         transport = self.transport_factory()
         logger.info("auction_source_started", extra={"run_id": run_id, "source_id": source_id})
         try:
-            source = self.sources.build(transport, source_ids=(source_id,))[0]
+            source = self.sources.build(
+                transport,
+                source_ids=(source_id,),
+                ignored_titles=self.operational.ignored_auction_titles(),
+            )[0]
             return source.scan()
         except Exception as exc:
             return SourceScanResult(
@@ -374,8 +403,16 @@ class AuctionRunEngine:
         """Quarantine implausible Castells shrinkage before reconciliation.
 
         Castells exposes active auctions through a volatile page rather than a
-        lifecycle API. A transient empty or structurally incomplete response
-        must not become evidence that previously observed lots disappeared.
+        lifecycle API, so an implausible collapse must not become evidence that
+        previously observed lots disappeared.
+
+        An emptied group is no longer treated as implausible. This check only
+        ever sees receipts the adapter already marked complete and
+        authoritative, and a partial or unreadable page now yields a failed
+        receipt instead, which never reaches here. Second-guessing a definitive
+        "this auction has no open lots" was self-sustaining: the baseline below
+        is read from the retained inventory itself, so a genuinely closed
+        auction stayed quarantined — and its lots active — forever.
         """
 
         if result.source_id != "castells" or result.discovery_status == "failed":
@@ -396,13 +433,14 @@ class AuctionRunEngine:
         for receipt in result.receipts:
             prior = prior_by_group.get(receipt.group_id, set())
             current = current_by_group.get(receipt.group_id, set())
-            suspicious_empty = bool(prior) and not current
-            suspicious_drop = len(prior) >= 8 and len(current) * 4 < len(prior)
+            suspicious_drop = (
+                bool(current) and len(prior) >= 8 and len(current) * 4 < len(prior)
+            )
             if (
                 receipt.group_id in active_groups
                 and receipt.status == "complete"
                 and receipt.inventory_authoritative
-                and (suspicious_empty or suspicious_drop)
+                and suspicious_drop
             ):
                 quarantined.add(receipt.group_id)
                 receipt = receipt.model_copy(

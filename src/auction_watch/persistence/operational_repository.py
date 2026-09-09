@@ -30,6 +30,7 @@ from auction_watch.persistence.models import (
     AuctionLotRow,
     AuctionSnapshotRow,
     CoverageReceiptRow,
+    IgnoredAuctionRow,
     NotificationOutboxRow,
     OpportunityRow,
     ProfileMatchRow,
@@ -422,6 +423,33 @@ class OperationalRepository:
         row.last_present_run_id = run_id
         return row
 
+    def retire_stale_lots(
+        self, source_ids: tuple[str, ...], *, run_id: str, cutoff: datetime
+    ) -> int:
+        """Deactivate lots no source has confirmed since ``cutoff``.
+
+        Some sources cannot prove that an auction is gone — Castells publishes a
+        volatile page, so an omitted group is never authoritative evidence of
+        removal. Without this, inventory from an auction that ended simply stays
+        active forever; presenting it as available is a lie either way, so age
+        is the honest tie-breaker.
+        """
+
+        if not source_ids:
+            return 0
+        moment = cutoff.astimezone(UTC)
+        with self._database.sessions.begin() as session:
+            rows = session.scalars(
+                select(OpportunityRow).where(
+                    OpportunityRow.source_id.in_(source_ids),
+                    OpportunityRow.active.is_(True),
+                    OpportunityRow.last_seen_at < moment,
+                )
+            ).all()
+            for row in rows:
+                self._remove_lifecycle(row, run_id, _utc_now())
+            return len(rows)
+
     @staticmethod
     def _remove_lifecycle(
         row: OpportunityRow | None, run_id: str, observed: datetime
@@ -607,6 +635,31 @@ class OperationalRepository:
                 )
                 for row in rows
             ]
+
+    def ignored_auction_titles(self) -> tuple[str, ...]:
+        """Return the auction-title patterns the user asked never to scan."""
+
+        with self._database.sessions.begin() as session:
+            rows = session.scalars(
+                select(IgnoredAuctionRow).order_by(IgnoredAuctionRow.pattern)
+            ).all()
+            return tuple(row.pattern for row in rows)
+
+    def replace_ignored_auction_titles(self, patterns: tuple[str, ...]) -> tuple[str, ...]:
+        """Replace the ignore list wholesale, de-duplicating blank and repeated entries."""
+
+        now = _utc_now()
+        cleaned: list[str] = []
+        for pattern in patterns:
+            text = pattern.strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        with self._database.sessions.begin() as session:
+            session.execute(delete(IgnoredAuctionRow))
+            session.flush()
+            for pattern in cleaned:
+                session.add(IgnoredAuctionRow(pattern=pattern, created_at=now))
+        return tuple(sorted(cleaned))
 
     def profile_reviews(self, profile_ids: tuple[str, ...]) -> dict[str, datetime]:
         """Return when each profile was last acknowledged, omitting never-reviewed ones."""

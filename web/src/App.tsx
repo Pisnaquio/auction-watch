@@ -742,6 +742,10 @@ function App() {
   const [closingTodayAll, setClosingTodayAll] = useState<ClosingTodayItem[]>([]);
   const [closingTodayAllOpen, setClosingTodayAllOpen] = useState(false);
   const [tab, setTab] = useState<OpportunityTab>("todas");
+  const [coverageOpen, setCoverageOpen] = useState(false);
+  const [ignoredOpen, setIgnoredOpen] = useState(false);
+  const [ignoredDraft, setIgnoredDraft] = useState("");
+  const [ignoredBusy, setIgnoredBusy] = useState(false);
   const selected = profiles.find((item) => item.profile.id === selectedId) ?? null;
 
   const refreshClosingTodayAll = useCallback(async (list: ProfileView[]) => {
@@ -1062,6 +1066,37 @@ function App() {
     }
   }
 
+  async function openIgnored() {
+    setIgnoredOpen(true);
+    try {
+      const current = await api<{ patterns: string[] }>("/api/v1/ignored-auctions");
+      setIgnoredDraft(current.patterns.join("\n"));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo cargar la lista");
+    }
+  }
+
+  async function saveIgnored() {
+    setIgnoredBusy(true);
+    try {
+      const saved = await api<{ patterns: string[] }>("/api/v1/ignored-auctions", {
+        method: "PUT",
+        body: JSON.stringify({ patterns: ignoredDraft.split("\n") }),
+      });
+      setIgnoredDraft(saved.patterns.join("\n"));
+      setIgnoredOpen(false);
+      setMessage(
+        saved.patterns.length === 1
+          ? "1 remate ignorado a partir de la próxima corrida."
+          : `${saved.patterns.length} remates ignorados a partir de la próxima corrida.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo guardar la lista");
+    } finally {
+      setIgnoredBusy(false);
+    }
+  }
+
   async function markReviewed() {
     if (!selected) return;
     try {
@@ -1137,6 +1172,22 @@ function App() {
     snapshot?.payload.sources.filter((source) => (source.skipped_groups?.length ?? 0) > 0) ?? [];
   const diagnosticSources =
     snapshot?.payload.sources.filter((source) => (source.diagnostics?.length ?? 0) > 0) ?? [];
+  const coverageNotes = [
+    degradedSources.length > 0 &&
+      degradedSources.map((source) => sourceNames[source.source_id] ?? source.source_id).join(", "),
+    skippedSources.length > 0 &&
+      `${skippedSources.reduce(
+        (total, source) => total + (source.skipped_groups?.length ?? 0),
+        0,
+      )} remates omitidos`,
+    diagnosticSources.length > 0 &&
+      `${diagnosticSources.reduce(
+        (total, source) =>
+          total +
+          (source.diagnostics?.filter((item) => item.status === "shadow_only").length ?? 0),
+        0,
+      )} en sombra`,
+  ].filter((note): note is string => typeof note === "string" && note.length > 0);
   const lastRun = history[0] ?? null;
   const lastRunLabel = lastRun
     ? {
@@ -1248,6 +1299,9 @@ function App() {
             <button className="button help-button" onClick={() => void openGuide()}>
               ? Cómo buscar mejor
             </button>
+            <button className="button secondary" onClick={() => void openIgnored()}>
+              Remates ignorados
+            </button>
             {selected && (
               <>
                 <span className={`status-pill ${selected.profile.enabled ? "on" : "off"}`}>
@@ -1357,52 +1411,74 @@ function App() {
                   </span>
                 </div>
               )}
-              {snapshot && !authoritative && (
-                <div className="coverage-warning">
-                  <strong>Cobertura parcial</strong>
-                  <span>No se interpreta como “sin resultados”.</span>
-                  {degradedSources.map((source) => (
-                    <small key={source.source_id}>
-                      {sourceNames[source.source_id] ?? source.source_id}: {source.status}
-                      {source.errors.length > 0 ? ` — ${source.errors.join("; ")}` : ""}
-                    </small>
-                  ))}
-                </div>
-              )}
-              {snapshot && skippedSources.length > 0 && (
-                <div className="coverage-warning">
-                  <strong>Remates descartados por título</strong>
-                  <span>
-                    Se omitieron únicamente grupos inequívocamente artísticos antes de consultar
-                    sus lotes.
-                  </span>
-                  {skippedSources.map((source) => (
-                    <small key={source.source_id}>
-                      {sourceNames[source.source_id] ?? source.source_id}: {source.skipped_groups?.length ?? 0}
-                    </small>
-                  ))}
-                </div>
-              )}
-              {snapshot && diagnosticSources.length > 0 && (
-                <div className="coverage-warning">
-                  <strong>Decodificación adaptativa</strong>
-                  <span>
-                    Sólo los envelopes inequívocos se publican; los demás quedan en sombra.
-                  </span>
-                  {diagnosticSources.map((source) => {
-                    const recovered =
-                      source.diagnostics?.filter((item) => item.status === "adaptive_recovered")
-                        .length ?? 0;
-                    const shadow =
-                      source.diagnostics?.filter((item) => item.status === "shadow_only").length ??
-                      0;
-                    return (
-                      <small key={source.source_id}>
-                        {sourceNames[source.source_id] ?? source.source_id}: {recovered} recuperados,
-                        {" "}{shadow} en sombra
-                      </small>
-                    );
-                  })}
+              {snapshot && coverageNotes.length > 0 && (
+                <div className={`coverage-note${authoritative ? "" : " degraded"}`}>
+                  <button
+                    className="coverage-note-head"
+                    onClick={() => setCoverageOpen((open) => !open)}
+                  >
+                    <span className="coverage-note-summary">
+                      {authoritative ? "Cobertura completa" : "Cobertura parcial"}
+                      {coverageNotes.length > 0 && ` · ${coverageNotes.join(" · ")}`}
+                    </span>
+                    <span className="coverage-note-toggle">
+                      {coverageOpen ? "Ocultar" : "Ver detalle"}
+                    </span>
+                  </button>
+                  {coverageOpen && (
+                    <div className="coverage-note-body">
+                      {!authoritative && (
+                        <>
+                          <strong>Cobertura parcial</strong>
+                          <span>No se interpreta como “sin resultados”.</span>
+                          {degradedSources.map((source) => (
+                            <small key={source.source_id}>
+                              {sourceNames[source.source_id] ?? source.source_id}: {source.status}
+                              {source.errors.length > 0 ? ` — ${source.errors.join("; ")}` : ""}
+                            </small>
+                          ))}
+                        </>
+                      )}
+                      {skippedSources.length > 0 && (
+                        <>
+                          <strong>Remates descartados por título</strong>
+                          <span>
+                            Se omitieron únicamente grupos inequívocamente artísticos antes de
+                            consultar sus lotes.
+                          </span>
+                          {skippedSources.map((source) => (
+                            <small key={source.source_id}>
+                              {sourceNames[source.source_id] ?? source.source_id}:{" "}
+                              {source.skipped_groups?.length ?? 0}
+                            </small>
+                          ))}
+                        </>
+                      )}
+                      {diagnosticSources.length > 0 && (
+                        <>
+                          <strong>Decodificación adaptativa</strong>
+                          <span>
+                            Sólo los envelopes inequívocos se publican; los demás quedan en sombra.
+                          </span>
+                          {diagnosticSources.map((source) => {
+                            const recovered =
+                              source.diagnostics?.filter(
+                                (item) => item.status === "adaptive_recovered",
+                              ).length ?? 0;
+                            const shadow =
+                              source.diagnostics?.filter((item) => item.status === "shadow_only")
+                                .length ?? 0;
+                            return (
+                              <small key={source.source_id}>
+                                {sourceNames[source.source_id] ?? source.source_id}: {recovered}{" "}
+                                recuperados, {shadow} en sombra
+                              </small>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               {snapshot && (
@@ -1556,6 +1632,56 @@ function App() {
           loading={guideLoading}
           onClose={() => setGuideOpen(false)}
         />
+      )}
+      {ignoredOpen && (
+        <div className="dialog-backdrop" onMouseDown={() => setIgnoredOpen(false)} role="presentation">
+          <div
+            className="search-guide-dialog ignored-dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header className="guide-header">
+              <div>
+                <p className="eyebrow">FUERA DE TODA BÚSQUEDA</p>
+                <h2>Remates ignorados</h2>
+              </div>
+              <button
+                aria-label="Cerrar"
+                className="dialog-close"
+                onClick={() => setIgnoredOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="guide-content">
+              <p>
+                Un remate cuyo nombre contenga alguno de estos textos no se consulta: no se
+                bajan sus lotes ni aparecen en ninguna búsqueda. Sirve para los que no se
+                delatan por el rubro, como una colección o el nombre de un artista.
+              </p>
+              <label>
+                Un texto por línea
+                <textarea
+                  onChange={(event) => setIgnoredDraft(event.target.value)}
+                  placeholder={"torres garcia\njulio zelman"}
+                  value={ignoredDraft}
+                />
+              </label>
+              <div className="ignored-actions">
+                <button
+                  className="button primary"
+                  disabled={ignoredBusy}
+                  onClick={() => void saveIgnored()}
+                >
+                  Guardar
+                </button>
+                <span className="muted">
+                  Se aplica en la próxima corrida.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

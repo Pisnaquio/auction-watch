@@ -44,3 +44,6 @@ select { width: 100%; margin-top: 6px; border: 1px solid #d8e1e9; border-radius:
 .guide-recipes span { color: #6c7e90; font-size: 11px; line-height: 1.4; }
 .guide-flow { display: grid; gap: 7px; margin: 0; padding-left: 22px; color: #536b7f; font-size: 12px; line-height: 1.45; }
 @media(max-width:700px){.dialog-backdrop{padding:0}.search-guide-dialog{max-height:100vh;height:100vh;border-radius:0}.guide-header,.guide-content{padding-left:17px;padding-right:17px}.guide-grid,.guide-source-list,.guide-status-list,.guide-recipes{grid-template-columns:1fr}.help-button{order:3;width:100%}}
+.ignored-dialog { width: min(560px, 100%); }
+.ignored-dialog textarea { min-height: 160px; font-family: ui-monospace, monospace; }
+.ignored-actions { display: flex; align-items: center; gap: 12px; }

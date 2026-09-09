@@ -164,7 +164,7 @@ def engine(
     for item in profiles:
         profiles_repo.create(item)
     registry = SourceRegistry(
-        (SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, state)),)
+        (SourceSpec("fake", "Fake", lambda transport, **options: FakeSource(transport, state)),)
     )
     return database, AuctionRunEngine(
         database,
@@ -192,7 +192,7 @@ def castells_engine(
             SourceSpec(
                 "castells",
                 "Castells",
-                lambda transport: CastellsFakeSource(transport, state),
+                lambda transport, **options: CastellsFakeSource(transport, state),
             ),
         )
     )
@@ -344,11 +344,15 @@ def test_parallel_sources_are_all_persisted_before_snapshot(tmp_path: Path) -> N
     profiles.create(profile().model_copy(update={"source_ids": ("fake", "other")}))
     registry = SourceRegistry(
         (
-            SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, fake_state)),
+            SourceSpec(
+                "fake",
+                "Fake",
+                lambda transport, **options: FakeSource(transport, fake_state),
+            ),
             SourceSpec(
                 "other",
                 "Other fake",
-                lambda transport: OtherFakeSource(transport, other_state),
+                lambda transport, **options: OtherFakeSource(transport, other_state),
             ),
         )
     )
@@ -441,11 +445,15 @@ def test_partial_source_keeps_healthy_source_results_in_snapshot(tmp_path: Path)
     profiles.create(profile().model_copy(update={"source_ids": ("fake", "other")}))
     registry = SourceRegistry(
         (
-            SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, partial_state)),
+            SourceSpec(
+                "fake",
+                "Fake",
+                lambda transport, **options: FakeSource(transport, partial_state),
+            ),
             SourceSpec(
                 "other",
                 "Other fake",
-                lambda transport: OtherFakeSource(transport, healthy_state),
+                lambda transport, **options: OtherFakeSource(transport, healthy_state),
             ),
         )
     )
@@ -543,18 +551,10 @@ def test_complete_empty_discovery_closes_omitted_group_but_partial_does_not(tmp_
 @pytest.mark.parametrize(
     "replacement",
     (
-        castells_complete_result(),
         castells_complete_result(include_group=False),
         castells_complete_result(castells_lot("lot:1")),
-        castells_complete_result().model_copy(
-            update={
-                "discovery_status": "partial",
-                "inventory_authoritative": False,
-                "errors": ("Castells timeout (1 group)",),
-            }
-        ),
     ),
-    ids=("empty-group", "omitted-group", "implausible-drop", "partial-source"),
+    ids=("omitted-group", "implausible-drop"),
 )
 def test_castells_unstable_inventory_never_deactivates_previous_matches(
     tmp_path: Path, replacement: SourceScanResult
@@ -579,6 +579,45 @@ def test_castells_unstable_inventory_never_deactivates_previous_matches(
         assert source["omission_authoritative"] is False
         assert "Castells unstable inventory evidence retained (1 group)" in source["errors"]
         assert len(snapshot.payload_json["profiles"][0]["matches"]) == 8
+    finally:
+        database.dispose()
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        castells_complete_result(),
+        castells_complete_result().model_copy(
+            update={
+                "discovery_status": "partial",
+                "inventory_authoritative": False,
+                "errors": ("Castells timeout (1 group)",),
+            }
+        ),
+    ),
+    ids=("emptied-group", "emptied-group-while-another-failed"),
+)
+def test_castells_emptied_group_retires_its_lots(
+    tmp_path: Path, replacement: SourceScanResult
+) -> None:
+    """A group the source read and reported as empty is closed, not unstable.
+
+    Retaining it was self-sustaining: the quarantine baseline is the retained
+    inventory itself, so a genuinely finished auction never aged out.
+    """
+
+    initial_lots = tuple(castells_lot(f"lot:{index}") for index in range(1, 9))
+    state = SourceState(castells_complete_result(*initial_lots))
+    database, runner = castells_engine(tmp_path, state)
+    try:
+        assert runner.run("consolas", request_id="stable-before").status == "completed"
+        state.result = replacement
+
+        runner.run("consolas", request_id="emptied-after")
+
+        repository = OperationalRepository(database)
+        assert repository.active_lots(("castells",)) == []
+        assert repository.active_matches(("consolas",)) == []
     finally:
         database.dispose()
 

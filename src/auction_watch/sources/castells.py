@@ -43,10 +43,18 @@ HOME_URL = urljoin(WEB_BASE, "frontend.home.aspx")
 LOTS_URL = urljoin(WEB_BASE, "rest/API/Remate/lotes")
 LOT_PAGE_SIZE = 500
 MAX_PAGES = 20
-MAX_WORKERS = 3
+# The site degrades under our own concurrency: a group that answers in 4s alone
+# times out when three requests are in flight. Two workers finish the whole scan
+# faster than three (58s vs 62s) and without a single failed group.
+MAX_WORKERS = 2
 MAX_REQUESTS = 160
-REQUEST_TIMEOUT_SECONDS = 8.0
-MAX_SCAN_SECONDS = 60.0
+# The lot endpoint answers in 4-9s for a 500-lot page, so the previous 8s ceiling
+# expired a good share of requests by construction and then burned the scan budget
+# retrying them. 20s matches every other adapter (see sources/base.py).
+REQUEST_TIMEOUT_SECONDS = 20.0
+# Enough for the ~15 relevant auctions at 3 workers, and still well under the
+# runner's five-minute lease.
+MAX_SCAN_SECONDS = 240.0
 MAX_ADAPTIVE_DEPTH = 5
 MAX_ADAPTIVE_NODES = 80
 MAX_ADAPTIVE_KEYS = 24
@@ -310,6 +318,24 @@ def _canonical_auctions(
     return tuple(unique.values()), discovery_issues, frozenset(conflicted)
 
 
+def _verified_empty_envelope(payload: Any) -> bool:
+    """Return whether Castells answered "this auction has no open lots".
+
+    A closed auction replies with its ``meta`` envelope and no lot list at all.
+    That is a complete answer, not structural drift: reading it as drift left the
+    group non-authoritative, so its stale lots could never be retired.
+    """
+
+    if not isinstance(payload, Mapping):
+        return False
+    meta = payload.get("meta") or payload.get("Meta")
+    if not isinstance(meta, Mapping):
+        return False
+    if any(isinstance(payload.get(key), list) for key in ("data", "Data", "rows", "Rows")):
+        return False
+    return not bool(meta.get("hasMore") or meta.get("HasMore"))
+
+
 def _same_source_url(value: Any, fallback: str) -> str:
     candidate = urljoin(WEB_BASE, clean_text(value)) if value else fallback
     parsed = urlsplit(candidate)
@@ -554,6 +580,9 @@ def _decode_lot_page(payload: Any, group_id: str) -> _DecodedPage:
             break
         node = nested
 
+    if _verified_empty_envelope(payload):
+        return _DecodedPage((), None)
+
     candidates = _list_candidates(payload)
     high = tuple(
         candidate for candidate in candidates if _candidate_confidence(candidate) == "high"
@@ -687,8 +716,9 @@ class CastellsSource(BaseAuctionSource):
         page_size: int = LOT_PAGE_SIZE,
         max_pages: int = MAX_PAGES,
         clock: Callable[[], float] = monotonic,
+        ignored_titles: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(transport, timeout=timeout)
+        super().__init__(transport, timeout=timeout, ignored_titles=ignored_titles)
         if max_workers < 1:
             raise ValueError("Castells max_workers must be positive")
         if max_requests < 1:
@@ -850,10 +880,15 @@ class CastellsSource(BaseAuctionSource):
                         warnings.append("invalid_price_currency")
                         price = None
                         currency = None
-                    raw_image = first_image(
-                        item.get("Imagen") or item.get("image"), base=WEB_BASE
+                    # Castells serves lot photos from its own CDN under
+                    # LoteImageUrl; the older keys never existed in the payload,
+                    # and same-host filtering silently dropped every image.
+                    image_url = first_image(
+                        item.get("LoteImageUrl")
+                        or item.get("Imagen")
+                        or item.get("image"),
+                        base=WEB_BASE,
                     )
-                    image_url = (_same_source_url(raw_image, "") if raw_image else None) or None
                     candidate = AuctionLot(
                         source_id=self.source_id,
                         auction_id=group_id,
@@ -948,7 +983,11 @@ class CastellsSource(BaseAuctionSource):
         for raw in auctions:
             group_id = external_id(clean_text(raw.get("RemateId")), "auction_id")
             title = clean_text(raw.get("RemateNombre"))
-            if group_id not in conflicted_groups and _irrelevant_art_title(title):
+            # A title the user asked to ignore is skipped even when the record
+            # conflicts: a conflicting copy is still the same unwanted auction.
+            if self.is_ignored_title(title) or (
+                group_id not in conflicted_groups and _irrelevant_art_title(title)
+            ):
                 skipped_groups.append(SkippedGroup(group_id=group_id, title=title))
             else:
                 relevant_auctions.append(raw)

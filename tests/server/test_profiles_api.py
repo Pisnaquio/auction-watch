@@ -411,3 +411,25 @@ def test_profile_review_mark_is_exposed_and_advances(tmp_path: Path) -> None:
         # The mark must not survive its profile, or the foreign key would block deletes.
         deleted = client.delete("/api/v1/profiles/libros?expected_revision=1")
         assert deleted.status_code == 204
+
+
+def test_ignored_auctions_round_trip_and_normalisation(tmp_path: Path) -> None:
+    application = create_app(
+        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine
+    )
+    with TestClient(application) as client:
+        assert client.get("/api/v1/ignored-auctions").json() == {"patterns": []}
+
+        saved = client.put(
+            "/api/v1/ignored-auctions",
+            json={"patterns": ["  Torres Garcia  ", "", "Julio Zelman", "Torres Garcia"]},
+        )
+        assert saved.status_code == 200
+        assert saved.json() == {"patterns": ["Julio Zelman", "Torres Garcia"]}
+        assert client.get("/api/v1/ignored-auctions").json() == {
+            "patterns": ["Julio Zelman", "Torres Garcia"]
+        }
+
+        assert client.put("/api/v1/ignored-auctions", json={"patterns": []}).json() == {
+            "patterns": []
+        }
