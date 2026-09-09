@@ -6,6 +6,12 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.26
+
+- Descartar o seguir una oportunidad mientras corre una búsqueda ya no falla con
+  un error del servidor: la corrida retiene la base para escribir y ahora la
+  acción espera su turno en lugar de cortarse.
+
 ## 0.1.25
 
 - Castells vuelve a recorrerse entero: el tiempo de espera por pedido estaba por
