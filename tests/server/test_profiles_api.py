@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from auction_watch.config import Settings
 from auction_watch.core.identity import encode_opportunity_key
@@ -433,3 +434,54 @@ def test_ignored_auctions_round_trip_and_normalisation(tmp_path: Path) -> None:
         assert client.put("/api/v1/ignored-auctions", json={"patterns": []}).json() == {
             "patterns": []
         }
+
+
+def test_opportunity_state_reports_a_busy_database_as_retryable(tmp_path: Path) -> None:
+    """A scan holds SQLite's single writer; that is not a server fault."""
+
+    application = create_app(
+        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine
+    )
+    with TestClient(application) as client:
+        assert (
+            client.post("/api/v1/profiles", json={"profile": profile_payload()}).status_code == 201
+        )
+        now = datetime.now(UTC)
+        operational = OperationalRepository(application.state.database)
+        operational.upsert_source(SourceRecord(source_id="bavastro", label="Bavastro"))
+        operational.upsert_group(
+            GroupRecord(
+                source_id="bavastro",
+                group_id="auction:1",
+                title="Subasta",
+                url="https://example.test/auction/1",
+                observed_at=now,
+            )
+        )
+        operational.upsert_lot(
+            LotRecord(
+                source_id="bavastro",
+                auction_id="auction:1",
+                lot_id="lot/1",
+                title="Libro",
+                lot_url="https://example.test/lot/1",
+                auction_url="https://example.test/auction/1",
+                observed_at=now,
+                active=True,
+            )
+        )
+
+        def locked(*_args: object, **_kwargs: object) -> None:
+            raise OperationalError("INSERT", {}, Exception("database is locked"))
+
+        application.state.operational_repository.set_user_state = locked  # type: ignore[method-assign]
+        response = client.post(
+            "/api/v1/profiles/libros/opportunities/state",
+            json={
+                "opportunity_key": encode_opportunity_key("bavastro", "auction:1", "lot/1"),
+                "state": "discard",
+            },
+        )
+
+        assert response.status_code == 503
+        assert "reintent" in response.json()["detail"]

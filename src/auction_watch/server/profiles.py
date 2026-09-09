@@ -7,6 +7,7 @@ from typing import Any, Literal, NoReturn, cast
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.exc import OperationalError
 
 from auction_watch.async_ops import NotificationRepository, RunQueueRepository
 from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
@@ -196,6 +197,12 @@ def _raise_profile_error(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=409, detail="resource is busy or stale") from exc
     if isinstance(exc, (ProfilePersistenceError, OperationalPersistenceError)):
         raise HTTPException(status_code=503, detail="persistence operation failed") from exc
+    # SQLite has a single writer, so a long scan can still outlast the busy
+    # timeout. That is a "try again in a moment", never a server fault.
+    if isinstance(exc, OperationalError) and "locked" in str(exc).lower():
+        raise HTTPException(
+            status_code=503, detail="la base está ocupada por una corrida; reintentá"
+        ) from exc
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=422, detail="invalid profile or run request") from exc
     raise exc
