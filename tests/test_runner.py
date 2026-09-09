@@ -543,18 +543,10 @@ def test_complete_empty_discovery_closes_omitted_group_but_partial_does_not(tmp_
 @pytest.mark.parametrize(
     "replacement",
     (
-        castells_complete_result(),
         castells_complete_result(include_group=False),
         castells_complete_result(castells_lot("lot:1")),
-        castells_complete_result().model_copy(
-            update={
-                "discovery_status": "partial",
-                "inventory_authoritative": False,
-                "errors": ("Castells timeout (1 group)",),
-            }
-        ),
     ),
-    ids=("empty-group", "omitted-group", "implausible-drop", "partial-source"),
+    ids=("omitted-group", "implausible-drop"),
 )
 def test_castells_unstable_inventory_never_deactivates_previous_matches(
     tmp_path: Path, replacement: SourceScanResult
@@ -579,6 +571,45 @@ def test_castells_unstable_inventory_never_deactivates_previous_matches(
         assert source["omission_authoritative"] is False
         assert "Castells unstable inventory evidence retained (1 group)" in source["errors"]
         assert len(snapshot.payload_json["profiles"][0]["matches"]) == 8
+    finally:
+        database.dispose()
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        castells_complete_result(),
+        castells_complete_result().model_copy(
+            update={
+                "discovery_status": "partial",
+                "inventory_authoritative": False,
+                "errors": ("Castells timeout (1 group)",),
+            }
+        ),
+    ),
+    ids=("emptied-group", "emptied-group-while-another-failed"),
+)
+def test_castells_emptied_group_retires_its_lots(
+    tmp_path: Path, replacement: SourceScanResult
+) -> None:
+    """A group the source read and reported as empty is closed, not unstable.
+
+    Retaining it was self-sustaining: the quarantine baseline is the retained
+    inventory itself, so a genuinely finished auction never aged out.
+    """
+
+    initial_lots = tuple(castells_lot(f"lot:{index}") for index in range(1, 9))
+    state = SourceState(castells_complete_result(*initial_lots))
+    database, runner = castells_engine(tmp_path, state)
+    try:
+        assert runner.run("consolas", request_id="stable-before").status == "completed"
+        state.result = replacement
+
+        runner.run("consolas", request_id="emptied-after")
+
+        repository = OperationalRepository(database)
+        assert repository.active_lots(("castells",)) == []
+        assert repository.active_matches(("consolas",)) == []
     finally:
         database.dispose()
 

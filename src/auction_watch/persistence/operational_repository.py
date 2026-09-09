@@ -422,6 +422,33 @@ class OperationalRepository:
         row.last_present_run_id = run_id
         return row
 
+    def retire_stale_lots(
+        self, source_ids: tuple[str, ...], *, run_id: str, cutoff: datetime
+    ) -> int:
+        """Deactivate lots no source has confirmed since ``cutoff``.
+
+        Some sources cannot prove that an auction is gone — Castells publishes a
+        volatile page, so an omitted group is never authoritative evidence of
+        removal. Without this, inventory from an auction that ended simply stays
+        active forever; presenting it as available is a lie either way, so age
+        is the honest tie-breaker.
+        """
+
+        if not source_ids:
+            return 0
+        moment = cutoff.astimezone(UTC)
+        with self._database.sessions.begin() as session:
+            rows = session.scalars(
+                select(OpportunityRow).where(
+                    OpportunityRow.source_id.in_(source_ids),
+                    OpportunityRow.active.is_(True),
+                    OpportunityRow.last_seen_at < moment,
+                )
+            ).all()
+            for row in rows:
+                self._remove_lifecycle(row, run_id, _utc_now())
+            return len(rows)
+
     @staticmethod
     def _remove_lifecycle(
         row: OpportunityRow | None, run_id: str, observed: datetime

@@ -795,8 +795,15 @@ def test_castells_productive_deadline_is_bounded_and_order_is_deterministic() ->
 def test_castells_defaults_have_a_bounded_latency_budget() -> None:
     source = CastellsSource(FakeTransport(lambda _url: FakeResponse(payload={})))
 
-    assert source.timeout == REQUEST_TIMEOUT_SECONDS == 8.0
-    assert source.deadline_seconds == MAX_SCAN_SECONDS == 60.0
+    assert source.timeout == REQUEST_TIMEOUT_SECONDS
+    assert source.deadline_seconds == MAX_SCAN_SECONDS
+    # The lot endpoint answers in 4-9s per page, so a timeout at or below that
+    # expires healthy requests by construction and then burns the scan budget
+    # retrying them.
+    assert REQUEST_TIMEOUT_SECONDS >= 15.0
+    # The whole scan still has to finish inside the runner's five-minute lease.
+    assert MAX_SCAN_SECONDS < 300.0
+    assert REQUEST_TIMEOUT_SECONDS < MAX_SCAN_SECONDS
 
 
 def test_remotes_parses_rss_and_deduplicates_by_query_lot_id() -> None:
