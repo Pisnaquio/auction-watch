@@ -336,7 +336,11 @@ class AuctionRunEngine:
         transport = self.transport_factory()
         logger.info("auction_source_started", extra={"run_id": run_id, "source_id": source_id})
         try:
-            source = self.sources.build(transport, source_ids=(source_id,))[0]
+            source = self.sources.build(
+                transport,
+                source_ids=(source_id,),
+                ignored_titles=self.operational.ignored_auction_titles(),
+            )[0]
             return source.scan()
         except Exception as exc:
             return SourceScanResult(

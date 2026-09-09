@@ -20,7 +20,7 @@ from auction_watch.sources.transport import Transport
 class SourceSpec:
     source_id: str
     label: str
-    factory: Callable[[Transport], BaseAuctionSource]
+    factory: Callable[..., BaseAuctionSource]
 
 
 class SourceRegistry:
@@ -48,9 +48,16 @@ class SourceRegistry:
         return tuple(self._specs[source_id] for source_id in source_ids)
 
     def build(
-        self, transport: Transport, source_ids: tuple[str, ...] | list[str] | None = None
+        self,
+        transport: Transport,
+        source_ids: tuple[str, ...] | list[str] | None = None,
+        *,
+        ignored_titles: tuple[str, ...] = (),
     ) -> tuple[BaseAuctionSource, ...]:
-        return tuple(spec.factory(transport) for spec in self.select(source_ids))
+        return tuple(
+            spec.factory(transport, ignored_titles=ignored_titles)
+            for spec in self.select(source_ids)
+        )
 
 
 DEFAULT_SOURCE_REGISTRY = SourceRegistry(

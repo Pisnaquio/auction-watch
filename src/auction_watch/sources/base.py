@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from auction_watch.core.models import AuctionGroup, AuctionLot
+from auction_watch.core.normalization import contains_term
 from auction_watch.sources.contracts import GroupReceipt, SourceScanResult
 from auction_watch.sources.transport import Transport, decode_response
 
@@ -95,10 +96,24 @@ class BaseAuctionSource(ABC):
     discovery_url: str
     timeout: float = 20.0
 
-    def __init__(self, transport: Transport, *, timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        transport: Transport,
+        *,
+        timeout: float | None = None,
+        ignored_titles: tuple[str, ...] = (),
+    ) -> None:
         self.transport = transport
+        self.ignored_titles = ignored_titles
         if timeout is not None:
             self.timeout = timeout
+
+    def is_ignored_title(self, title: str) -> bool:
+        """Return whether the user asked to skip this auction by name."""
+
+        return bool(title) and any(
+            contains_term(title, pattern) for pattern in self.ignored_titles
+        )
 
     @abstractmethod
     def scan(self) -> SourceScanResult:

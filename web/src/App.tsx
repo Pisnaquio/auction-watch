@@ -743,6 +743,9 @@ function App() {
   const [closingTodayAllOpen, setClosingTodayAllOpen] = useState(false);
   const [tab, setTab] = useState<OpportunityTab>("todas");
   const [coverageOpen, setCoverageOpen] = useState(false);
+  const [ignoredOpen, setIgnoredOpen] = useState(false);
+  const [ignoredDraft, setIgnoredDraft] = useState("");
+  const [ignoredBusy, setIgnoredBusy] = useState(false);
   const selected = profiles.find((item) => item.profile.id === selectedId) ?? null;
 
   const refreshClosingTodayAll = useCallback(async (list: ProfileView[]) => {
@@ -1063,6 +1066,37 @@ function App() {
     }
   }
 
+  async function openIgnored() {
+    setIgnoredOpen(true);
+    try {
+      const current = await api<{ patterns: string[] }>("/api/v1/ignored-auctions");
+      setIgnoredDraft(current.patterns.join("\n"));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo cargar la lista");
+    }
+  }
+
+  async function saveIgnored() {
+    setIgnoredBusy(true);
+    try {
+      const saved = await api<{ patterns: string[] }>("/api/v1/ignored-auctions", {
+        method: "PUT",
+        body: JSON.stringify({ patterns: ignoredDraft.split("\n") }),
+      });
+      setIgnoredDraft(saved.patterns.join("\n"));
+      setIgnoredOpen(false);
+      setMessage(
+        saved.patterns.length === 1
+          ? "1 remate ignorado a partir de la próxima corrida."
+          : `${saved.patterns.length} remates ignorados a partir de la próxima corrida.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo guardar la lista");
+    } finally {
+      setIgnoredBusy(false);
+    }
+  }
+
   async function markReviewed() {
     if (!selected) return;
     try {
@@ -1264,6 +1298,9 @@ function App() {
             )}
             <button className="button help-button" onClick={() => void openGuide()}>
               ? Cómo buscar mejor
+            </button>
+            <button className="button secondary" onClick={() => void openIgnored()}>
+              Remates ignorados
             </button>
             {selected && (
               <>
@@ -1595,6 +1632,56 @@ function App() {
           loading={guideLoading}
           onClose={() => setGuideOpen(false)}
         />
+      )}
+      {ignoredOpen && (
+        <div className="dialog-backdrop" onMouseDown={() => setIgnoredOpen(false)} role="presentation">
+          <div
+            className="search-guide-dialog ignored-dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header className="guide-header">
+              <div>
+                <p className="eyebrow">FUERA DE TODA BÚSQUEDA</p>
+                <h2>Remates ignorados</h2>
+              </div>
+              <button
+                aria-label="Cerrar"
+                className="dialog-close"
+                onClick={() => setIgnoredOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="guide-content">
+              <p>
+                Un remate cuyo nombre contenga alguno de estos textos no se consulta: no se
+                bajan sus lotes ni aparecen en ninguna búsqueda. Sirve para los que no se
+                delatan por el rubro, como una colección o el nombre de un artista.
+              </p>
+              <label>
+                Un texto por línea
+                <textarea
+                  onChange={(event) => setIgnoredDraft(event.target.value)}
+                  placeholder={"torres garcia\njulio zelman"}
+                  value={ignoredDraft}
+                />
+              </label>
+              <div className="ignored-actions">
+                <button
+                  className="button primary"
+                  disabled={ignoredBusy}
+                  onClick={() => void saveIgnored()}
+                >
+                  Guardar
+                </button>
+                <span className="muted">
+                  Se aplica en la próxima corrida.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

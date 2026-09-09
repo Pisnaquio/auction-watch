@@ -164,7 +164,7 @@ def engine(
     for item in profiles:
         profiles_repo.create(item)
     registry = SourceRegistry(
-        (SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, state)),)
+        (SourceSpec("fake", "Fake", lambda transport, **options: FakeSource(transport, state)),)
     )
     return database, AuctionRunEngine(
         database,
@@ -192,7 +192,7 @@ def castells_engine(
             SourceSpec(
                 "castells",
                 "Castells",
-                lambda transport: CastellsFakeSource(transport, state),
+                lambda transport, **options: CastellsFakeSource(transport, state),
             ),
         )
     )
@@ -344,11 +344,15 @@ def test_parallel_sources_are_all_persisted_before_snapshot(tmp_path: Path) -> N
     profiles.create(profile().model_copy(update={"source_ids": ("fake", "other")}))
     registry = SourceRegistry(
         (
-            SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, fake_state)),
+            SourceSpec(
+                "fake",
+                "Fake",
+                lambda transport, **options: FakeSource(transport, fake_state),
+            ),
             SourceSpec(
                 "other",
                 "Other fake",
-                lambda transport: OtherFakeSource(transport, other_state),
+                lambda transport, **options: OtherFakeSource(transport, other_state),
             ),
         )
     )
@@ -441,11 +445,15 @@ def test_partial_source_keeps_healthy_source_results_in_snapshot(tmp_path: Path)
     profiles.create(profile().model_copy(update={"source_ids": ("fake", "other")}))
     registry = SourceRegistry(
         (
-            SourceSpec("fake", "Fake", lambda transport: FakeSource(transport, partial_state)),
+            SourceSpec(
+                "fake",
+                "Fake",
+                lambda transport, **options: FakeSource(transport, partial_state),
+            ),
             SourceSpec(
                 "other",
                 "Other fake",
-                lambda transport: OtherFakeSource(transport, healthy_state),
+                lambda transport, **options: OtherFakeSource(transport, healthy_state),
             ),
         )
     )

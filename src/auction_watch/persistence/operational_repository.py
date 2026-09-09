@@ -30,6 +30,7 @@ from auction_watch.persistence.models import (
     AuctionLotRow,
     AuctionSnapshotRow,
     CoverageReceiptRow,
+    IgnoredAuctionRow,
     NotificationOutboxRow,
     OpportunityRow,
     ProfileMatchRow,
@@ -634,6 +635,31 @@ class OperationalRepository:
                 )
                 for row in rows
             ]
+
+    def ignored_auction_titles(self) -> tuple[str, ...]:
+        """Return the auction-title patterns the user asked never to scan."""
+
+        with self._database.sessions.begin() as session:
+            rows = session.scalars(
+                select(IgnoredAuctionRow).order_by(IgnoredAuctionRow.pattern)
+            ).all()
+            return tuple(row.pattern for row in rows)
+
+    def replace_ignored_auction_titles(self, patterns: tuple[str, ...]) -> tuple[str, ...]:
+        """Replace the ignore list wholesale, de-duplicating blank and repeated entries."""
+
+        now = _utc_now()
+        cleaned: list[str] = []
+        for pattern in patterns:
+            text = pattern.strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        with self._database.sessions.begin() as session:
+            session.execute(delete(IgnoredAuctionRow))
+            session.flush()
+            for pattern in cleaned:
+                session.add(IgnoredAuctionRow(pattern=pattern, created_at=now))
+        return tuple(sorted(cleaned))
 
     def profile_reviews(self, profile_ids: tuple[str, ...]) -> dict[str, datetime]:
         """Return when each profile was last acknowledged, omitting never-reviewed ones."""

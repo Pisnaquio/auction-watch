@@ -716,8 +716,9 @@ class CastellsSource(BaseAuctionSource):
         page_size: int = LOT_PAGE_SIZE,
         max_pages: int = MAX_PAGES,
         clock: Callable[[], float] = monotonic,
+        ignored_titles: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(transport, timeout=timeout)
+        super().__init__(transport, timeout=timeout, ignored_titles=ignored_titles)
         if max_workers < 1:
             raise ValueError("Castells max_workers must be positive")
         if max_requests < 1:
@@ -982,7 +983,11 @@ class CastellsSource(BaseAuctionSource):
         for raw in auctions:
             group_id = external_id(clean_text(raw.get("RemateId")), "auction_id")
             title = clean_text(raw.get("RemateNombre"))
-            if group_id not in conflicted_groups and _irrelevant_art_title(title):
+            # A title the user asked to ignore is skipped even when the record
+            # conflicts: a conflicting copy is still the same unwanted auction.
+            if self.is_ignored_title(title) or (
+                group_id not in conflicted_groups and _irrelevant_art_title(title)
+            ):
                 skipped_groups.append(SkippedGroup(group_id=group_id, title=title))
             else:
                 relevant_auctions.append(raw)

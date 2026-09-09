@@ -67,7 +67,13 @@ class LocalFixtureSource(BaseAuctionSource):
 
 def fixture_engine(database, **kwargs):
     registry = SourceRegistry(
-        (SourceSpec("bavastro", "Bavastro", lambda transport: LocalFixtureSource(transport)),)
+        (
+            SourceSpec(
+                "bavastro",
+                "Bavastro",
+                lambda transport, **options: LocalFixtureSource(transport),
+            ),
+        )
     )
     return AuctionRunEngine(
         database,

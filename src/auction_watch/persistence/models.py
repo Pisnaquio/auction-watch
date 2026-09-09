@@ -319,6 +319,14 @@ class UserOpportunityStateRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class IgnoredAuctionRow(Base):
+    """Auction titles the user never wants scanned, whatever the source."""
+
+    __tablename__ = "ignored_auctions"
+    pattern: Mapped[str] = mapped_column(String(256), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ProfileReviewRow(Base):
     """When the user last acknowledged a profile's opportunities.
 

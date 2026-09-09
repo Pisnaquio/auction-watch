@@ -1054,3 +1054,44 @@ def test_registry_selection_and_duplicate_detection_remain_deterministic() -> No
         "todoremates",
         "prado",
     }
+
+
+def test_castells_skips_auctions_the_user_named() -> None:
+    """Art auctions named after a collection or artist say nothing about art."""
+
+    records = (
+        (1, "TALLER TORRES GARCIA"),
+        (2, "Coleccion Julio Zelman"),
+        (3, "Multirubro"),
+    )
+    document = "<html><script>GXState=" + "".join(
+        json.dumps(
+            {
+                "RemateImagen": "/img.jpg",
+                "RemateId": group_id,
+                "RemateNombre": title,
+                "RemateTipo": 1,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        for group_id, title in records
+    ) + ";</script></html>"
+
+    def respond(url: str) -> FakeResponse:
+        if "frontend.home" in url:
+            return FakeResponse(text=document)
+        return FakeResponse(payload={"data": [], "meta": {"hasMore": False}})
+
+    # The built-in art markers cannot catch either title on their own.
+    assert CastellsSource(FakeTransport(respond)).scan().skipped_groups == ()
+
+    result = CastellsSource(
+        FakeTransport(respond), ignored_titles=("torres garcia", "julio zelman")
+    ).scan()
+
+    assert [group.title for group in result.skipped_groups] == [
+        "TALLER TORRES GARCIA",
+        "Coleccion Julio Zelman",
+    ]
+    assert [group.auction_id for group in result.groups] == ["3"]
