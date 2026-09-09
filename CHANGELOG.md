@@ -6,6 +6,24 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.25
+
+- Castells vuelve a recorrerse entero: el tiempo de espera por pedido estaba por
+  debajo de lo que tarda el sitio en responder, así que los pedidos sanos
+  expiraban y agotaban el presupuesto de la corrida. Las corridas dejan de salir
+  parciales por esta fuente.
+- Un remate sin lotes abiertos se reconoce como tal en vez de leerse como un
+  error de formato. Eso era lo que impedía dar de baja los lotes de los remates
+  ya cerrados.
+- Los lotes que nadie pudo confirmar en 48 horas dejan de mostrarse, y los que
+  tienen fecha de cierre vencida ya no aparecen entre los resultados.
+- Aparecen las fotos de los lotes de Castells, que se estaban descartando.
+- Nueva lista de «Remates ignorados», editable desde la interfaz: un remate cuyo
+  nombre contenga alguno de esos textos no se consulta. Sirve para los que no se
+  delatan por el rubro, como una colección o el nombre de un artista.
+- Los tres carteles de cobertura se resumen en una línea que se despliega si
+  querés el detalle.
+
 ## 0.1.24
 
 - Muestra la foto del lote en cada oportunidad, cuando la fuente la publica.
