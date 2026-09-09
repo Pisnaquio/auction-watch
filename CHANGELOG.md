@@ -6,6 +6,21 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.23
+
+- Separa las oportunidades en solapas con contador: «Todas», «Nuevas»,
+  «Siguiendo» y «Descartadas». Las descartadas dejan de estar mezcladas en la
+  lista principal y pasan a su propia solapa.
+- Marca como «Nueva» lo que apareció desde la última vez que revisaste esa
+  búsqueda, con un botón «Marcar como vistas» para poner la cuenta en cero.
+  Ahora el mail y la pantalla hablan de lo mismo.
+- Las oportunidades seguidas se distinguen a simple vista: antes eran idénticas
+  a las que nunca tocaste.
+- Ordena la lista por cierre más próximo, en lugar del identificador interno
+  del lote; las que no informan cierre quedan al final.
+- Cada oportunidad ofrece sólo las acciones que corresponden a su estado, y
+  descartar o seguir se refleja al instante en vez de esperar la recarga.
+
 ## 0.1.22
 
 - Agrega un aviso arriba de todo, visible sin importar qué búsqueda tengas
