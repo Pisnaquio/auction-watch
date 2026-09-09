@@ -63,6 +63,7 @@ type Match = {
     price_label: string;
     lot_url: string;
     closing_at: string | null;
+    image_url: string | null;
   };
 };
 type ClosingTodayItem = {
@@ -195,10 +196,48 @@ function closesToday(closingAt: string | null, timezone: string): boolean {
   return today !== null && dateKey(new Date(closingAt), timezone) === today;
 }
 
+function closingLabel(closingAt: string | null, timezone: string): string {
+  if (!closingAt) return "Sin fecha de cierre";
+  const when = new Date(closingAt);
+  if (Number.isNaN(when.getTime())) return "Sin fecha de cierre";
+  try {
+    const time = new Intl.DateTimeFormat("es-UY", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(when);
+    if (closesToday(closingAt, timezone)) return `Cierra hoy ${time}`;
+    const day = new Intl.DateTimeFormat("es-UY", {
+      timeZone: timezone,
+      day: "2-digit",
+      month: "2-digit",
+    }).format(when);
+    // Sources keep listing lots whose closing date already passed; announcing
+    // those as still closing would be a plain lie.
+    return `${when.getTime() < Date.now() ? "Cerró" : "Cierra"} ${day} ${time}`;
+  } catch {
+    return "Sin fecha de cierre";
+  }
+}
+
+function hasClosed(closingAt: string | null): boolean {
+  if (!closingAt) return false;
+  const when = Date.parse(closingAt);
+  return !Number.isNaN(when) && when < Date.now();
+}
+
+// Upcoming first (soonest on top), then undated, then already closed: a lot
+// whose auction is over is the least actionable and must not lead the list.
 function closingSoonest(left: Match, right: Match): number {
-  const first = left.lot.closing_at ? Date.parse(left.lot.closing_at) : Number.POSITIVE_INFINITY;
-  const second = right.lot.closing_at ? Date.parse(right.lot.closing_at) : Number.POSITIVE_INFINITY;
-  if (first !== second) return first - second;
+  const rank = (match: Match): [number, number] => {
+    const at = match.lot.closing_at ? Date.parse(match.lot.closing_at) : Number.NaN;
+    if (Number.isNaN(at)) return [1, 0];
+    return at >= Date.now() ? [0, at] : [2, -at];
+  };
+  const [leftGroup, leftAt] = rank(left);
+  const [rightGroup, rightAt] = rank(right);
+  if (leftGroup !== rightGroup) return leftGroup - rightGroup;
+  if (leftAt !== rightAt) return leftAt - rightAt;
   return left.opportunity_key.localeCompare(right.opportunity_key);
 }
 
@@ -584,14 +623,20 @@ function Opportunity({
   match,
   state,
   isNew,
+  timezone,
   onState,
 }: {
   match: Match;
   state: OpportunityState;
   isNew: boolean;
+  timezone: string;
   onState: (key: string, state: "follow" | "discard" | "restore") => void;
 }) {
+  // Castells never publishes images, so roughly half the cards have none;
+  // a broken one must collapse rather than leave a torn placeholder.
+  const [imageBroken, setImageBroken] = useState(false);
   const ringPct = Math.max(0, Math.min(100, match.score));
+  const closesTodayHere = closesToday(match.lot.closing_at, timezone);
   return (
     <article className={`opportunity-card ${state === "none" ? "" : state}`}>
       <div className="opportunity-main">
@@ -620,9 +665,29 @@ function Opportunity({
             ))}
           </div>
         </div>
+        <div className="opportunity-thumb">
+          {match.lot.image_url && !imageBroken && (
+            <a href={match.lot.lot_url} rel="noreferrer" target="_blank">
+              <img
+                alt=""
+                loading="lazy"
+                onError={() => setImageBroken(true)}
+                referrerPolicy="no-referrer"
+                src={match.lot.image_url}
+              />
+            </a>
+          )}
+        </div>
       </div>
       <div className="opportunity-meta">
         <span>{match.lot.price_label || "Precio no informado"}</span>
+        <span
+          className={`closing${closesTodayHere ? " today" : ""}${
+            hasClosed(match.lot.closing_at) ? " closed" : ""
+          }`}
+        >
+          {closingLabel(match.lot.closing_at, timezone)}
+        </span>
         <a href={match.lot.lot_url} rel="noreferrer" target="_blank">
           Ver publicación ↗
         </a>
@@ -1405,6 +1470,7 @@ function App() {
                     match={match}
                     onState={(key, state) => void setState(key, state)}
                     state={stateByKey.get(match.opportunity_key) ?? "none"}
+                    timezone={selected?.profile.schedule.timezone ?? "UTC"}
                   />
                 ))}
               </div>
