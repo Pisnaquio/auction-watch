@@ -27,7 +27,14 @@ type Profile = {
   notification_mode: "disabled" | "matches" | "matches_or_failure";
   schedule: { enabled: boolean; times: string[]; timezone: string };
 };
-type ProfileView = { profile: Profile; revision: number; protected: boolean };
+type ProfileView = {
+  profile: Profile;
+  revision: number;
+  protected: boolean;
+  reviewed_at: string | null;
+};
+type OpportunityState = "none" | "following" | "dismissed";
+type OpportunityTab = "todas" | "nuevas" | "siguiendo" | "descartadas";
 type Run = {
   run_id: string;
   profile_id: string;
@@ -46,6 +53,9 @@ type Match = {
   opportunity_key: string;
   score: number;
   matched_terms: string[];
+  // Absent on snapshots published before novelty was exposed; those read as "not new".
+  first_match_at?: string | null;
+  last_match_at?: string | null;
   lot: {
     auction_id: string;
     title: string;
@@ -90,7 +100,7 @@ type Snapshot = {
       }>;
     }>;
     profiles: Array<{ profile_id: string; matches: Match[] }>;
-    user_states: Array<{ opportunity_key?: string; state: string; version: number }>;
+    user_states: Array<{ opportunity_key?: string; state: OpportunityState; version: number }>;
   };
 };
 type GuidanceWarning = { code: string; field: string; message: string };
@@ -183,6 +193,13 @@ function closesToday(closingAt: string | null, timezone: string): boolean {
   if (!closingAt) return false;
   const today = dateKey(new Date(), timezone);
   return today !== null && dateKey(new Date(closingAt), timezone) === today;
+}
+
+function closingSoonest(left: Match, right: Match): number {
+  const first = left.lot.closing_at ? Date.parse(left.lot.closing_at) : Number.POSITIVE_INFINITY;
+  const second = right.lot.closing_at ? Date.parse(right.lot.closing_at) : Number.POSITIVE_INFINITY;
+  if (first !== second) return first - second;
+  return left.opportunity_key.localeCompare(right.opportunity_key);
 }
 
 function emptyProfile(): Profile {
@@ -566,15 +583,17 @@ function Editor({
 function Opportunity({
   match,
   state,
+  isNew,
   onState,
 }: {
   match: Match;
-  state: string;
+  state: OpportunityState;
+  isNew: boolean;
   onState: (key: string, state: "follow" | "discard" | "restore") => void;
 }) {
   const ringPct = Math.max(0, Math.min(100, match.score));
   return (
-    <article className={`opportunity-card ${state === "dismissed" ? "dismissed" : ""}`}>
+    <article className={`opportunity-card ${state === "none" ? "" : state}`}>
       <div className="opportunity-main">
         <div
           className="score-ring"
@@ -586,6 +605,13 @@ function Opportunity({
           </div>
         </div>
         <div>
+          {(isNew || state !== "none") && (
+            <div className="opportunity-badges">
+              {isNew && <span className="badge new">Nueva</span>}
+              {state === "following" && <span className="badge following">Siguiendo</span>}
+              {state === "dismissed" && <span className="badge dismissed">Descartada</span>}
+            </div>
+          )}
           <h3>{match.lot.title}</h3>
           <p>{match.lot.description || "Sin descripción"}</p>
           <div className="tags">
@@ -601,15 +627,24 @@ function Opportunity({
           Ver publicación ↗
         </a>
         <div className="state-actions">
-          {state === "following" ? (
-            <button onClick={() => onState(match.opportunity_key, "restore")}>Dejar de seguir</button>
-          ) : (
-            <button onClick={() => onState(match.opportunity_key, "follow")}>Seguir</button>
-          )}
           {state === "dismissed" ? (
             <button onClick={() => onState(match.opportunity_key, "restore")}>Restaurar</button>
           ) : (
-            <button onClick={() => onState(match.opportunity_key, "discard")}>Descartar</button>
+            <>
+              {state === "following" ? (
+                <button onClick={() => onState(match.opportunity_key, "restore")}>
+                  Dejar de seguir
+                </button>
+              ) : (
+                <button onClick={() => onState(match.opportunity_key, "follow")}>Seguir</button>
+              )}
+              <button
+                className="discard"
+                onClick={() => onState(match.opportunity_key, "discard")}
+              >
+                Descartar
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -641,6 +676,7 @@ function App() {
   const [runtime, setRuntime] = useState<RuntimeState | null>(null);
   const [closingTodayAll, setClosingTodayAll] = useState<ClosingTodayItem[]>([]);
   const [closingTodayAllOpen, setClosingTodayAllOpen] = useState(false);
+  const [tab, setTab] = useState<OpportunityTab>("todas");
   const selected = profiles.find((item) => item.profile.id === selectedId) ?? null;
 
   const refreshClosingTodayAll = useCallback(async (list: ProfileView[]) => {
@@ -737,6 +773,7 @@ function App() {
     if (selectedId && !creating) {
       void loadData(selectedId);
     }
+    setTab("todas");
   }, [creating, loadData, selectedId]);
 
   useEffect(() => {
@@ -927,8 +964,23 @@ function App() {
   }
 
   async function setState(key: string, state: "follow" | "discard" | "restore") {
-    if (!selected) return;
-    const existing = snapshot?.payload.user_states.find((item) => item.opportunity_key === key);
+    if (!selected || !snapshot) return;
+    const previous = snapshot;
+    const existing = snapshot.payload.user_states.find((item) => item.opportunity_key === key);
+    const decided: OpportunityState =
+      state === "follow" ? "following" : state === "discard" ? "dismissed" : "none";
+    // The server bumps the version the same way, so a second action on this
+    // card still sends the version the server actually holds.
+    setSnapshot({
+      ...snapshot,
+      payload: {
+        ...snapshot.payload,
+        user_states: [
+          ...snapshot.payload.user_states.filter((item) => item.opportunity_key !== key),
+          { opportunity_key: key, state: decided, version: (existing?.version ?? 0) + 1 },
+        ],
+      },
+    });
     try {
       await api(`/api/v1/profiles/${encodeURIComponent(selected.profile.id)}/opportunities/state`, {
         method: "POST",
@@ -938,10 +990,29 @@ function App() {
           expected_version: existing?.version,
         }),
       });
-      await loadData(selected.profile.id);
       void refreshClosingTodayAll(profiles);
     } catch (reason) {
+      setSnapshot(previous);
       setError(reason instanceof Error ? reason.message : "No se pudo actualizar la oportunidad");
+    }
+  }
+
+  async function markReviewed() {
+    if (!selected) return;
+    try {
+      const result = await api<{ profile_id: string; reviewed_at: string }>(
+        `/api/v1/profiles/${encodeURIComponent(selected.profile.id)}/reviewed`,
+        { method: "POST" },
+      );
+      setProfiles((items) =>
+        items.map((item) =>
+          item.profile.id === result.profile_id
+            ? { ...item, reviewed_at: result.reviewed_at }
+            : item,
+        ),
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudieron marcar como vistas");
     }
   }
 
@@ -950,18 +1021,41 @@ function App() {
       snapshot?.payload.profiles.find((item) => item.profile_id === selectedId)?.matches ?? [],
     [selectedId, snapshot],
   );
-  const todayClosingMatches = useMemo(() => {
-    const dismissed = new Set(
-      (snapshot?.payload.user_states ?? [])
-        .filter((state) => state.state === "dismissed")
-        .map((state) => state.opportunity_key),
-    );
-    return matches.filter(
-      (match) =>
-        !dismissed.has(match.opportunity_key) &&
+  const stateByKey = useMemo(() => {
+    const decisions = new Map<string, OpportunityState>();
+    for (const item of snapshot?.payload.user_states ?? []) {
+      if (item.opportunity_key) decisions.set(item.opportunity_key, item.state);
+    }
+    return decisions;
+  }, [snapshot?.payload.user_states]);
+  const buckets = useMemo(() => {
+    // A search never acknowledged has no anchor, so everything it found is new.
+    const reviewedAt = selected?.reviewed_at ? Date.parse(selected.reviewed_at) : null;
+    const isNew = (match: Match) =>
+      match.first_match_at
+        ? reviewedAt === null || Date.parse(match.first_match_at) > reviewedAt
+        : false;
+    const sorted = [...matches].sort(closingSoonest);
+    const active = sorted.filter((match) => stateByKey.get(match.opportunity_key) !== "dismissed");
+    return {
+      todas: active,
+      nuevas: active.filter(isNew),
+      siguiendo: active.filter(
+        (match) => stateByKey.get(match.opportunity_key) === "following",
+      ),
+      descartadas: sorted.filter(
+        (match) => stateByKey.get(match.opportunity_key) === "dismissed",
+      ),
+      isNew,
+    };
+  }, [matches, selected?.reviewed_at, stateByKey]);
+  const todayClosingMatches = useMemo(
+    () =>
+      buckets.todas.filter((match) =>
         closesToday(match.lot.closing_at, selected?.profile.schedule.timezone ?? "UTC"),
-    );
-  }, [matches, selected?.profile.schedule.timezone, snapshot?.payload.user_states]);
+      ),
+    [buckets.todas, selected?.profile.schedule.timezone],
+  );
   const todayClosingAuctionCount = useMemo(
     () => new Set(todayClosingMatches.map((match) => match.lot.auction_id)).size,
     [todayClosingMatches],
@@ -1246,11 +1340,31 @@ function App() {
                   })}
                 </div>
               )}
-              {snapshot && authoritative && matches.length === 0 && (
-                <div className="empty-state">
-                  <span>○</span>
-                  <strong>Sin oportunidades por ahora.</strong>
-                  <p>La cobertura fue autoritativa en la última corrida.</p>
+              {snapshot && (
+                <div className="opportunity-tabs">
+                  {(
+                    [
+                      ["todas", "Todas"],
+                      ["nuevas", "Nuevas"],
+                      ["siguiendo", "Siguiendo"],
+                      ["descartadas", "Descartadas"],
+                    ] as Array<[OpportunityTab, string]>
+                  ).map(([id, label]) => (
+                    <button
+                      className={`opportunity-tab${tab === id ? " selected" : ""}${
+                        id === "nuevas" && buckets.nuevas.length > 0 ? " accent" : ""
+                      }`}
+                      key={id}
+                      onClick={() => setTab(id)}
+                    >
+                      {label} <span className="opportunity-tab-count">{buckets[id].length}</span>
+                    </button>
+                  ))}
+                  {buckets.nuevas.length > 0 && (
+                    <button className="mark-reviewed" onClick={() => void markReviewed()}>
+                      Marcar como vistas
+                    </button>
+                  )}
                 </div>
               )}
               {!snapshot && (
@@ -1260,17 +1374,37 @@ function App() {
                   <p>Actualizá para consultar las fuentes seleccionadas.</p>
                 </div>
               )}
+              {snapshot && buckets[tab].length === 0 && (
+                <div className="empty-state">
+                  <span>○</span>
+                  <strong>
+                    {tab === "nuevas"
+                      ? "Sin novedades desde la última vez que miraste."
+                      : tab === "siguiendo"
+                        ? "No estás siguiendo ninguna."
+                        : tab === "descartadas"
+                          ? "No descartaste ninguna."
+                          : matches.length === 0
+                            ? "Sin oportunidades por ahora."
+                            : "Descartaste todas las oportunidades."}
+                  </strong>
+                  <p>
+                    {tab === "todas" && matches.length === 0 && authoritative
+                      ? "La cobertura fue autoritativa en la última corrida."
+                      : tab === "todas" && matches.length > 0
+                        ? "Están en la solapa «Descartadas»."
+                        : ""}
+                  </p>
+                </div>
+              )}
               <div className="opportunity-list">
-                {matches.map((match) => (
+                {buckets[tab].map((match) => (
                   <Opportunity
+                    isNew={buckets.isNew(match)}
                     key={match.opportunity_key}
                     match={match}
                     onState={(key, state) => void setState(key, state)}
-                    state={
-                      snapshot?.payload.user_states.find(
-                        (item) => item.opportunity_key === match.opportunity_key,
-                      )?.state ?? "none"
-                    }
+                    state={stateByKey.get(match.opportunity_key) ?? "none"}
                   />
                 ))}
               </div>

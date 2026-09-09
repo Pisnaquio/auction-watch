@@ -144,13 +144,16 @@ def _notification_view(item: Any) -> dict[str, object]:
     }
 
 
-def _profile_view(stored: StoredProfile) -> dict[str, object]:
+def _profile_view(
+    stored: StoredProfile, reviewed_at: datetime | None = None
+) -> dict[str, object]:
     return {
         "profile": stored.profile.model_dump(mode="json"),
         "revision": stored.revision,
         "created_at": stored.created_at.isoformat(),
         "updated_at": stored.updated_at.isoformat(),
         "protected": stored.profile.kind == "system",
+        "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
     }
 
 
@@ -290,8 +293,10 @@ def get_search_guidance(body: SearchGuidanceRequest) -> dict[str, object]:
 
 @router.get("/profiles")
 def list_profiles(request: Request) -> list[dict[str, object]]:
-    profiles, _ = _repositories(request)
-    return [_profile_view(item) for item in profiles.list()]
+    profiles, operational = _repositories(request)
+    stored = profiles.list()
+    reviews = operational.profile_reviews(tuple(item.profile.id for item in stored))
+    return [_profile_view(item, reviews.get(item.profile.id)) for item in stored]
 
 
 @router.get("/profiles/{profile_id}/runs")
@@ -366,11 +371,22 @@ def create_profile(request: Request, body: ProfileCreateRequest) -> dict[str, ob
 
 @router.get("/profiles/{profile_id}")
 def get_profile(request: Request, profile_id: str) -> dict[str, object]:
-    profiles, _ = _repositories(request)
+    profiles, operational = _repositories(request)
     stored = profiles.get(profile_id)
     if stored is None:
         raise HTTPException(status_code=404, detail="profile not found")
-    return _profile_view(stored)
+    return _profile_view(stored, operational.profile_reviews((profile_id,)).get(profile_id))
+
+
+@router.post("/profiles/{profile_id}/reviewed")
+def mark_profile_reviewed(request: Request, profile_id: str) -> dict[str, object]:
+    """Acknowledge a profile's current opportunities, clearing what reads as new."""
+
+    profiles, operational = _repositories(request)
+    if profiles.get(profile_id) is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    reviewed_at = operational.mark_profile_reviewed(profile_id, reviewed_at=datetime.now(UTC))
+    return {"profile_id": profile_id, "reviewed_at": reviewed_at.isoformat()}
 
 
 @router.patch("/profiles/{profile_id}")

@@ -12,6 +12,7 @@ from auction_watch.persistence import (
     LotRecord,
     NotificationOutboxRecord,
     OperationalRepository,
+    ProfileMatchRecord,
     ReconciliationReceiptError,
     RunRecord,
     SourceRecord,
@@ -269,4 +270,60 @@ def test_outbox_deduplication_survives_concurrent_inserts(operational) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
         ids = list(pool.map(lambda _index: repository.enqueue_notification(item), range(2)))
     assert ids[0] == ids[1]
+    database.dispose()
+
+
+def test_profile_review_mark_is_absent_until_acknowledged(operational) -> None:
+    database, repository = operational
+    assert repository.profile_reviews(("consolas",)) == {}
+    assert repository.profile_reviews(()) == {}
+
+    first = repository.mark_profile_reviewed("consolas", reviewed_at=NOW)
+    assert repository.profile_reviews(("consolas",)) == {"consolas": NOW}
+
+    later = NOW.replace(hour=18)
+    second = repository.mark_profile_reviewed("consolas", reviewed_at=later)
+    assert second > first
+    assert repository.profile_reviews(("consolas", "ausente")) == {"consolas": later}
+    database.dispose()
+
+
+def test_record_match_preserves_first_match_at_across_runs(operational) -> None:
+    """A rematched lot must not look new again: first_match_at is the novelty anchor."""
+
+    database, repository = operational
+    repository.create_run(RunRecord(run_id="run-1", status="running", started_at=NOW))
+    repository.create_run(RunRecord(run_id="run-2", status="running", started_at=NOW))
+    repository.upsert_lot(lot("a"))
+
+    def match(run_id: str, moment: datetime) -> ProfileMatchRecord:
+        return ProfileMatchRecord(
+            profile_id="consolas",
+            source_id="remotes",
+            auction_id="auction:1",
+            lot_id="a",
+            score=5,
+            matched_terms=("console",),
+            first_seen_at=moment,
+            last_seen_at=moment,
+            active=True,
+            first_match_at=moment,
+            last_match_at=moment,
+            confirmed_match_run_id=run_id,
+        )
+
+    repository.record_match(match("run-1", NOW))
+    later = NOW.replace(hour=20)
+    repository.record_match(match("run-2", later))
+
+    stored = repository.active_matches(("consolas",))
+    assert len(stored) == 1
+    assert stored[0].first_match_at == NOW
+    assert stored[0].last_match_at == later
+
+    # Disappearing and coming back must not reset the anchor either.
+    repository.deactivate_missing_matches("run-2", "consolas", set())
+    repository.record_match(match("run-2", later))
+    revived = repository.active_matches(("consolas",))
+    assert revived[0].first_match_at == NOW
     database.dispose()

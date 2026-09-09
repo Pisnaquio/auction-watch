@@ -378,3 +378,36 @@ def test_notification_api_redacts_delivery_payload_and_supports_protected_mode(
         assert recipient not in exposed
         assert password not in exposed
         assert "payload" not in listed.json()[0]
+
+
+def test_profile_review_mark_is_exposed_and_advances(tmp_path: Path) -> None:
+    application = create_app(
+        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine
+    )
+    with TestClient(application) as client:
+        assert (
+            client.post("/api/v1/profiles", json={"profile": profile_payload()}).status_code == 201
+        )
+        # A freshly created search has nothing acknowledged yet, so everything it
+        # matches on its first run is legitimately new.
+        assert client.get("/api/v1/profiles/libros").json()["reviewed_at"] is None
+
+        marked = client.post("/api/v1/profiles/libros/reviewed")
+        assert marked.status_code == 200
+        reviewed_at = marked.json()["reviewed_at"]
+        assert reviewed_at is not None
+        assert client.get("/api/v1/profiles/libros").json()["reviewed_at"] == reviewed_at
+        listed = next(
+            item
+            for item in client.get("/api/v1/profiles").json()
+            if item["profile"]["id"] == "libros"
+        )
+        assert listed["reviewed_at"] == reviewed_at
+
+        again = client.post("/api/v1/profiles/libros/reviewed")
+        assert again.json()["reviewed_at"] >= reviewed_at
+        assert client.post("/api/v1/profiles/ausente/reviewed").status_code == 404
+
+        # The mark must not survive its profile, or the foreign key would block deletes.
+        deleted = client.delete("/api/v1/profiles/libros?expected_revision=1")
+        assert deleted.status_code == 204

@@ -319,6 +319,20 @@ class UserOpportunityStateRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ProfileReviewRow(Base):
+    """When the user last acknowledged a profile's opportunities.
+
+    Kept out of ``profiles`` on purpose: marking a search as reviewed must not
+    bump the configuration revision that guards concurrent edits.
+    """
+
+    __tablename__ = "profile_reviews"
+    profile_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("profiles.id"), primary_key=True
+    )
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class NotificationOutboxRow(Base):
     __tablename__ = "notification_outbox"
     __table_args__ = (
