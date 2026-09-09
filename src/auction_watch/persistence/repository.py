@@ -17,6 +17,7 @@ from auction_watch.persistence.database import Database
 from auction_watch.persistence.models import (
     NotificationOutboxRow,
     ProfileMatchRow,
+    ProfileReviewRow,
     ProfileRow,
     ProfileSourceRow,
     RunProfileRow,
@@ -316,6 +317,9 @@ class ProfileRepository:
                 )
                 session.execute(
                     delete(ProfileMatchRow).where(ProfileMatchRow.profile_id == profile_id)
+                )
+                session.execute(
+                    delete(ProfileReviewRow).where(ProfileReviewRow.profile_id == profile_id)
                 )
                 session.execute(delete(RunQueueRow).where(RunQueueRow.profile_id == profile_id))
                 session.execute(delete(RunProfileRow).where(RunProfileRow.profile_id == profile_id))

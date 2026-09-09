@@ -33,6 +33,7 @@ from auction_watch.persistence.models import (
     NotificationOutboxRow,
     OpportunityRow,
     ProfileMatchRow,
+    ProfileReviewRow,
     RunLeaseRow,
     RunProfileRow,
     RunRow,
@@ -606,6 +607,29 @@ class OperationalRepository:
                 )
                 for row in rows
             ]
+
+    def profile_reviews(self, profile_ids: tuple[str, ...]) -> dict[str, datetime]:
+        """Return when each profile was last acknowledged, omitting never-reviewed ones."""
+
+        if not profile_ids:
+            return {}
+        with self._database.sessions.begin() as session:
+            rows = session.scalars(
+                select(ProfileReviewRow).where(ProfileReviewRow.profile_id.in_(profile_ids))
+            ).all()
+            return {row.profile_id: _as_utc(row.reviewed_at) for row in rows}
+
+    def mark_profile_reviewed(self, profile_id: str, *, reviewed_at: datetime) -> datetime:
+        """Advance a profile's acknowledgement mark, creating it when absent."""
+
+        moment = reviewed_at.astimezone(UTC)
+        with self._database.sessions.begin() as session:
+            row = session.get(ProfileReviewRow, profile_id)
+            if row is None:
+                session.add(ProfileReviewRow(profile_id=profile_id, reviewed_at=moment))
+            else:
+                row.reviewed_at = moment
+        return moment
 
     def lot_exists(self, source_id: str, auction_id: str, lot_id: str) -> bool:
         """Return whether an opportunity identity is present in reconciled storage."""

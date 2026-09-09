@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from auction_watch.core.identity import decode_opportunity_key
+from auction_watch.core.identity import decode_opportunity_key, encode_opportunity_key
 from auction_watch.core.matching import match_lot
 from auction_watch.core.models import AuctionGroup, AuctionLot, MatchResult
 from auction_watch.persistence.contracts import (
@@ -539,11 +539,15 @@ class AuctionRunEngine:
 
     @staticmethod
     def _match_payload(result: ProfileMatchRecord, lot: LotRecord) -> dict[str, object]:
+        # first_match_at is stable across runs (record_match preserves it), so it
+        # is what tells a reader whether this profile had already matched the lot.
         return {
             "opportunity_key": lot.opportunity_key,
             "score": result.score,
             "matched_terms": list(result.matched_terms),
             "matched_fields": {key: list(value) for key, value in result.matched_fields.items()},
+            "first_match_at": result.first_match_at.isoformat() if result.first_match_at else None,
+            "last_match_at": result.last_match_at.isoformat() if result.last_match_at else None,
             "lot": lot.model_dump(mode="json"),
         }
 
@@ -613,7 +617,15 @@ class AuctionRunEngine:
                 for key, profile_ids in sorted(unified.items())
             ],
             "opportunities": [item.model_dump(mode="json") for item in lifecycles],
-            "user_states": [item.model_dump(mode="json") for item in states],
+            "user_states": [
+                {
+                    **item.model_dump(mode="json"),
+                    "opportunity_key": encode_opportunity_key(
+                        item.source_id, item.auction_id, item.lot_id
+                    ),
+                }
+                for item in states
+            ],
         }
 
     @staticmethod
