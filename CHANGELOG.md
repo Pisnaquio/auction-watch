@@ -6,6 +6,13 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.28
+
+- Los resultados guardados ya no incluyen una copia de la tabla interna de
+  seguimiento de lotes, que no se usaba en ninguna pantalla y pesaba unos 10 MB
+  por corrida. La interfaz abre mucho más rápido y la base deja de crecer varios
+  megabytes cada vez que corre una búsqueda.
+
 ## 0.1.27
 
 - La interfaz carga mucho más rápido: cada respuesta de resultados arrastraba
