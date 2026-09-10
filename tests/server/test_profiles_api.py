@@ -485,3 +485,53 @@ def test_opportunity_state_reports_a_busy_database_as_retryable(tmp_path: Path) 
 
         assert response.status_code == 503
         assert "reintent" in response.json()["detail"]
+
+
+def test_snapshot_response_omits_the_lifecycle_table(tmp_path: Path) -> None:
+    """It is ~10MB of a ~12MB payload, nothing reads it, and the run history
+    embeds one snapshot per run."""
+
+    application = create_app(
+        Settings(data_dir=tmp_path, worker_enabled=False), run_engine_factory=FakeRunEngine
+    )
+    with TestClient(application) as client:
+        assert (
+            client.post("/api/v1/profiles", json={"profile": profile_payload()}).status_code == 201
+        )
+        queued = client.post(
+            "/api/v1/runs",
+            headers={"Idempotency-Key": "snapshot-size"},
+            json={"profile_id": "libros"},
+        )
+        assert queued.status_code == 202
+        run_id = queued.json()["run_id"]
+        application.state.worker.run_once()
+
+        operational = OperationalRepository(application.state.database)
+        operational.record_snapshot(
+            f"{run_id}:snapshot",
+            run_id,
+            "hash",
+            "completed",
+            {
+                "run": {"run_id": run_id, "status": "completed"},
+                "sources": [],
+                "profiles": [{"profile_id": "libros", "matches": []}],
+                "opportunities": [{"opportunity_key": "aw1:bavastro:1:1"}],
+                "user_states": [],
+            },
+            published_at=datetime.now(UTC),
+        )
+
+        payload = client.get("/api/v1/profiles/libros/snapshot").json()["payload"]
+        assert "opportunities" not in payload
+        assert payload["profiles"][0]["profile_id"] == "libros"
+
+        history = client.get("/api/v1/profiles/libros/runs").json()
+        embedded = next(item["snapshot"] for item in history if item["snapshot"])
+        assert "opportunities" not in embedded["payload"]
+
+        # The stored snapshot keeps it for auditing.
+        stored = operational.snapshot_for_run(run_id)
+        assert stored is not None
+        assert "opportunities" in stored.payload_json
