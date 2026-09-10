@@ -459,3 +459,42 @@ def test_importing_persistence_does_not_create_sqlite(tmp_path: Path) -> None:
         check=True,
     )
     assert not sqlite_path(tmp_path).exists()
+
+
+def test_reclaim_free_space_only_rewrites_when_it_is_worth_it(tmp_path: Path) -> None:
+    """SQLite keeps freed pages in the file; dropping the duplicated snapshot
+    payloads left hundreds of megabytes of holes still occupying the disk."""
+
+    from auction_watch.persistence.database import reclaim_free_space
+
+    database = Database.open(tmp_path)
+    upgrade_head(tmp_path, database.engine)
+    path = sqlite_path(tmp_path)
+    try:
+        with database.engine.begin() as connection:
+            connection.exec_driver_sql("CREATE TABLE bulk (id INTEGER PRIMARY KEY, blob TEXT)")
+            payload = "x" * 200_000
+            for index in range(60):
+                connection.exec_driver_sql(
+                    "INSERT INTO bulk (id, blob) VALUES (?, ?)", (index, payload)
+                )
+
+        # Settle the rows into the file itself, the way a run's snapshots were,
+        # so that deleting them leaves real holes rather than WAL churn.
+        assert reclaim_free_space(database.engine, threshold=10 * 1024**3) == 0
+        inflated = path.stat().st_size
+        assert inflated > 8 * 1024 * 1024
+
+        with database.engine.begin() as connection:
+            connection.exec_driver_sql("DELETE FROM bulk")
+
+        # Below the threshold nothing is rewritten, so the holes stay.
+        assert reclaim_free_space(database.engine, threshold=10 * 1024**3) == 0
+        assert path.stat().st_size >= inflated
+
+        reclaimed = reclaim_free_space(database.engine, threshold=1)
+        assert reclaimed > 0
+        assert path.stat().st_size < inflated
+        assert database.check_ready()
+    finally:
+        database.dispose()

@@ -20,7 +20,7 @@ from auction_watch.async_ops import NotificationRepository, RunQueueRepository
 from auction_watch.config import Settings, get_settings
 from auction_watch.notifications.sender import SMTPNotificationSender
 from auction_watch.notifications.service import NotificationPlanner
-from auction_watch.persistence.database import Database
+from auction_watch.persistence.database import Database, reclaim_free_space
 from auction_watch.persistence.migrations import upgrade_head
 from auction_watch.persistence.operational_repository import OperationalRepository
 from auction_watch.persistence.repository import ProfileRepository
@@ -64,6 +64,12 @@ def create_app(
             try:
                 database = Database.open(runtime_settings.data_dir)
                 upgrade_head(runtime_settings.data_dir, database.engine)
+                reclaimed = reclaim_free_space(database.engine)
+                if reclaimed:
+                    logger.info(
+                        "auction_database_space_reclaimed",
+                        extra={"bytes": reclaimed},
+                    )
             except Exception as exc:
                 logger.error("database initialization failed (%s)", type(exc).__name__)
                 if database is not None:

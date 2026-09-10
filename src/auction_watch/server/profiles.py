@@ -235,11 +235,11 @@ def _run_view(outcome: RunOutcome, operational: OperationalRepository) -> dict[s
 
 
 def _queue_view(
-    item: Any, operational: OperationalRepository
+    item: Any, operational: OperationalRepository, *, with_snapshot: bool = True
 ) -> dict[str, object]:
     run = operational.get_run(item.run_id)
     snapshot = operational.snapshot_for_run(item.run_id)
-    return {
+    view = {
         "run_id": item.run_id,
         "idempotency_key": item.idempotency_key,
         "profile_id": item.profile_id,
@@ -253,8 +253,10 @@ def _queue_view(
         "selected_sources": list(run.selected_sources) if run else [],
         "snapshot_id": snapshot.snapshot_id if snapshot else None,
         "content_hash": snapshot.content_hash if snapshot else None,
-        "snapshot": _snapshot_view(snapshot) if snapshot else None,
     }
+    if with_snapshot:
+        view["snapshot"] = _snapshot_view(snapshot) if snapshot else None
+    return view
 
 
 def _snapshot_view(row: Any) -> dict[str, object]:
@@ -348,7 +350,13 @@ def list_profile_runs(request: Request, profile_id: str) -> list[dict[str, objec
     profiles, operational = _repositories(request)
     if profiles.get(profile_id) is None:
         raise HTTPException(status_code=404, detail="profile not found")
-    return [_queue_view(item, operational) for item in _queue(request).recent(profile_id)]
+    # The history lists status and timing only. Embedding one full snapshot per
+    # run made this the heaviest response in the app for data nobody reads; the
+    # snapshot itself stays one request away at /profiles/{id}/snapshot.
+    return [
+        _queue_view(item, operational, with_snapshot=False)
+        for item in _queue(request).recent(profile_id)
+    ]
 
 
 @router.get("/profiles/{profile_id}/notifications")

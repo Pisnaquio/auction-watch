@@ -527,9 +527,16 @@ def test_snapshot_response_omits_the_lifecycle_table(tmp_path: Path) -> None:
         assert "opportunities" not in payload
         assert payload["profiles"][0]["profile_id"] == "libros"
 
+        # The history lists status and timing; it carries no snapshot at all,
+        # which is what made it the heaviest response in the app.
         history = client.get("/api/v1/profiles/libros/runs").json()
-        embedded = next(item["snapshot"] for item in history if item["snapshot"])
-        assert "opportunities" not in embedded["payload"]
+        assert history
+        assert all("snapshot" not in item for item in history)
+        assert next(item["snapshot_id"] for item in history if item["snapshot_id"])
+
+        # A single run still exposes its snapshot, without the lifecycle copy.
+        detail = client.get(f"/api/v1/runs/{run_id}").json()
+        assert "opportunities" not in detail["snapshot"]["payload"]
 
         # The stored snapshot keeps it for auditing.
         stored = operational.snapshot_for_run(run_id)
