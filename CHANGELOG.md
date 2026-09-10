@@ -6,6 +6,13 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.27
+
+- La interfaz carga mucho más rápido: cada respuesta de resultados arrastraba
+  unos 10 MB de datos internos que ninguna pantalla usaba, y el historial de
+  corridas repetía eso una vez por corrida. Abrir una búsqueda movía más de
+  100 MB.
+
 ## 0.1.26
 
 - Descartar o seguir una oportunidad mientras corre una búsqueda ya no falla con
