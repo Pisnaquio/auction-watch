@@ -882,3 +882,23 @@ def test_source_exception_releases_lease_for_following_run(tmp_path: Path) -> No
         assert runner.run("profile-a", request_id="after-failure").status == "completed"
     finally:
         database.dispose()
+
+
+def test_snapshot_payload_does_not_duplicate_the_lifecycle_table(tmp_path: Path) -> None:
+    """The opportunities table is the source of truth; copying it into every
+    snapshot cost ~10MB of a ~12MB payload and nothing read it."""
+
+    state = SourceState(complete_result(lot()))
+    database, runner = engine(tmp_path, state, profile())
+    try:
+        outcome = runner.run("profile-a", request_id="no-lifecycles")
+        repository = OperationalRepository(database)
+        snapshot = repository.snapshot_for_run(outcome.run_id)
+        assert snapshot is not None
+
+        assert "opportunities" not in snapshot.payload_json
+        assert snapshot.payload_json["profiles"][0]["matches"]
+        # The table still holds it.
+        assert repository.lifecycles(("fake",))
+    finally:
+        database.dispose()
