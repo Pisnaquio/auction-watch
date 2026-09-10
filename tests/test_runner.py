@@ -548,17 +548,11 @@ def test_complete_empty_discovery_closes_omitted_group_but_partial_does_not(tmp_
         database.dispose()
 
 
-@pytest.mark.parametrize(
-    "replacement",
-    (
-        castells_complete_result(include_group=False),
-        castells_complete_result(castells_lot("lot:1")),
-    ),
-    ids=("omitted-group", "implausible-drop"),
-)
-def test_castells_unstable_inventory_never_deactivates_previous_matches(
-    tmp_path: Path, replacement: SourceScanResult
-) -> None:
+def test_castells_implausible_drop_is_quarantined_as_partial(tmp_path: Path) -> None:
+    """A group we did read that collapsed to a fraction of its inventory is
+    genuinely suspicious, so it still degrades the run."""
+
+    replacement = castells_complete_result(castells_lot("lot:1"))
     initial_lots = tuple(castells_lot(f"lot:{index}") for index in range(1, 9))
     state = SourceState(castells_complete_result(*initial_lots))
     database, runner = castells_engine(tmp_path, state)
@@ -582,6 +576,33 @@ def test_castells_unstable_inventory_never_deactivates_previous_matches(
     finally:
         database.dispose()
 
+
+def test_castells_group_that_left_the_site_retains_without_degrading_the_run(
+    tmp_path: Path,
+) -> None:
+    """Auctions end and drop off the home page constantly. Their lots are kept
+    until the staleness TTL retires them, but reporting each one as lost
+    coverage left every single run marked partial."""
+
+    initial_lots = tuple(castells_lot(f"lot:{index}") for index in range(1, 9))
+    state = SourceState(castells_complete_result(*initial_lots))
+    database, runner = castells_engine(tmp_path, state)
+    try:
+        assert runner.run("consolas", request_id="stable-before").status == "completed"
+        state.result = castells_complete_result(include_group=False)
+
+        second = runner.run("consolas", request_id="group-gone")
+
+        assert second.status == "completed"
+        assert second.errors == ()
+        repository = OperationalRepository(database)
+        # Still retained: nothing proved the lots are gone.
+        assert len(repository.active_lots(("castells",))) == 8
+        snapshot = repository.snapshot_for_run(second.run_id)
+        assert snapshot is not None
+        assert snapshot.payload_json["sources"][0]["errors"] == []
+    finally:
+        database.dispose()
 
 @pytest.mark.parametrize(
     "replacement",
