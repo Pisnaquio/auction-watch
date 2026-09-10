@@ -597,7 +597,6 @@ class AuctionRunEngine:
         matches: Mapping[str, list[dict[str, object]]],
         source_ids: tuple[str, ...],
     ) -> dict[str, object]:
-        lifecycles = self.operational.lifecycles(source_ids)
         states = self.operational.user_states(tuple(profile.profile.id for profile in profiles))
         unified: dict[str, list[str]] = {}
         for profile_id, profile_matches in matches.items():
@@ -654,7 +653,6 @@ class AuctionRunEngine:
                 {"opportunity_key": key, "profiles": sorted(profile_ids)}
                 for key, profile_ids in sorted(unified.items())
             ],
-            "opportunities": [item.model_dump(mode="json") for item in lifecycles],
             "user_states": [
                 {
                     **item.model_dump(mode="json"),
