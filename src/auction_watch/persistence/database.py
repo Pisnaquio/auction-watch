@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +51,50 @@ def create_sqlite_engine(data_dir: Path) -> Engine:
         connection.exec_driver_sql(statement)
 
     return engine
+
+
+RECLAIM_THRESHOLD_BYTES = 64 * 1024 * 1024
+
+
+def reclaim_free_space(engine: Engine, *, threshold: int = RECLAIM_THRESHOLD_BYTES) -> int:
+    """VACUUM when the file holds a meaningful amount of unused pages.
+
+    SQLite never returns freed pages to the filesystem on its own, so dropping
+    the duplicated snapshot payloads left hundreds of megabytes of holes in a
+    file that still occupied the disk. Only worth the rewrite when there is real
+    space to recover, hence the threshold.
+    """
+
+    # VACUUM cannot run inside a transaction, and this engine opens one
+    # explicitly on begin, so talk to the driver directly: connect_args already
+    # put the sqlite3 connection in autocommit.
+    raw = engine.raw_connection()
+    try:
+        cursor = raw.cursor()
+        try:
+            try:
+                # Freed pages sit in the WAL until it is folded back, and the
+                # freelist reads empty until then.
+                cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:
+                pass
+            free_pages = cursor.execute("PRAGMA freelist_count").fetchone()[0]
+            page_size = cursor.execute("PRAGMA page_size").fetchone()[0]
+            reclaimable = int(free_pages or 0) * int(page_size or 0)
+            if reclaimable < threshold:
+                return 0
+            cursor.execute("VACUUM")
+            # The rewrite lands in the WAL, so the file only gives the space
+            # back to the filesystem once that is folded in.
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:
+                pass
+            return reclaimable
+        finally:
+            cursor.close()
+    finally:
+        raw.close()
 
 
 @dataclass
