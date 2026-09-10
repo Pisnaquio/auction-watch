@@ -258,13 +258,20 @@ def _queue_view(
 
 
 def _snapshot_view(row: Any) -> dict[str, object]:
+    payload = row.payload_json
+    if isinstance(payload, dict) and "opportunities" in payload:
+        # The stored snapshot keeps the whole lifecycle table for auditing, but
+        # nothing reads it over HTTP and it is ~10MB of a ~12MB response. The
+        # run history embeds one snapshot per run, so shipping it turned a single
+        # profile view into tens of megabytes.
+        payload = {key: value for key, value in payload.items() if key != "opportunities"}
     return {
         "snapshot_id": row.snapshot_id,
         "run_id": row.run_id,
         "content_hash": row.content_hash,
         "status": row.status,
         "published_at": row.published_at.isoformat() if row.published_at else None,
-        "payload": row.payload_json,
+        "payload": payload,
     }
 
 
