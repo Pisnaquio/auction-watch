@@ -196,6 +196,19 @@ function closesToday(closingAt: string | null, timezone: string): boolean {
   return today !== null && dateKey(new Date(closingAt), timezone) === today;
 }
 
+// The backend identifier is [a-z0-9] joined by hyphens. Nobody should have to
+// know that: "Máquinas de fotos" becomes "maquinas-de-fotos" on its own.
+function toSlug(value: string, { trim = true }: { trim?: boolean } = {}): string {
+  const base = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "");
+  // While typing, a trailing hyphen is the separator the next word needs.
+  return trim ? base.replace(/-+$/, "") : base;
+}
+
 function closingLabel(closingAt: string | null, timezone: string): string {
   if (!closingAt) return "Sin fecha de cierre";
   const when = new Date(closingAt);
@@ -319,6 +332,7 @@ function Editor({
     setBoosts(JSON.stringify(profile.boost_keywords, null, 2));
     setContexts(JSON.stringify(profile.context_rules, null, 2));
   }, [profile.boost_keywords, profile.context_rules]);
+  const [idTouched, setIdTouched] = useState(false);
   const locked = selected?.protected ?? false;
   const canBypassWarnings = warnings.every(
     (warning) => warning.code !== "no_positive_terms",
@@ -327,6 +341,7 @@ function Editor({
   function parsedProfile(): Profile {
     return {
       ...profile,
+      id: toSlug(profile.id),
       keywords_any: parseTermInput(termInputs.keywords_any),
       keywords_all: parseTermInput(termInputs.keywords_all),
       exact_phrases: parseTermInput(termInputs.exact_phrases),
@@ -369,16 +384,26 @@ function Editor({
           <label>
             Identificador
             <input
-              onChange={(event) => update("id", event.target.value)}
+              onBlur={(event) => update("id", toSlug(event.target.value))}
+              onChange={(event) => {
+                setIdTouched(true);
+                update("id", toSlug(event.target.value, { trim: false }));
+              }}
               placeholder="libros-usados"
               required
               value={profile.id}
             />
+            <small className="field-hint">
+              Se arma solo con el nombre. Lo podés cambiar.
+            </small>
           </label>
           <label>
             Nombre visible
             <input
-              onChange={(event) => update("name", event.target.value)}
+              onChange={(event) => {
+                update("name", event.target.value);
+                if (!idTouched) update("id", toSlug(event.target.value));
+              }}
               placeholder="Libros usados"
               required
               value={profile.name}
@@ -927,7 +952,12 @@ function App() {
         setMessage("Cambios guardados.");
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "No se pudo guardar el perfil");
+      const detail = reason instanceof Error ? reason.message : "";
+      setError(
+        detail.includes("lowercase slug")
+          ? "El identificador sólo admite letras, números y guiones. Escribí un nombre y se arma solo."
+          : detail || "No se pudo guardar el perfil",
+      );
     } finally {
       setBusy(false);
     }

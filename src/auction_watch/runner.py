@@ -426,9 +426,12 @@ class AuctionRunEngine:
         for current_lot in result.lots:
             current_by_group.setdefault(current_lot.auction_id, set()).add(current_lot.lot_id)
         active_groups = {group.auction_id for group in result.groups if group.active}
-        observed_groups = {receipt.group_id for receipt in result.receipts}
-        observed_groups.update(group.group_id for group in result.skipped_groups)
-        quarantined = set(prior_by_group) - observed_groups
+        # A group that stopped appearing on the home page is an auction that
+        # ended. Its lots are retained anyway — with no receipt, reconciliation
+        # never touches them — and they age out through the staleness TTL. That
+        # is routine, so it no longer colours the run partial: auctions finish
+        # constantly, and reporting each one kept every run in that state.
+        dropped: set[str] = set()
         receipts = []
         for receipt in result.receipts:
             prior = prior_by_group.get(receipt.group_id, set())
@@ -442,7 +445,7 @@ class AuctionRunEngine:
                 and receipt.inventory_authoritative
                 and suspicious_drop
             ):
-                quarantined.add(receipt.group_id)
+                dropped.add(receipt.group_id)
                 receipt = receipt.model_copy(
                     update={
                         "status": "partial",
@@ -451,9 +454,9 @@ class AuctionRunEngine:
                     }
                 )
             receipts.append(receipt)
-        if not quarantined:
+        if not dropped:
             return result
-        count = len(quarantined)
+        count = len(dropped)
         error = f"Castells unstable inventory evidence retained ({count} "
         error += "group)" if count == 1 else "groups)"
         return result.model_copy(

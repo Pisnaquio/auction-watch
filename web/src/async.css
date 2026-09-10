@@ -47,3 +47,4 @@ select { width: 100%; margin-top: 6px; border: 1px solid #d8e1e9; border-radius:
 .ignored-dialog { width: min(560px, 100%); }
 .ignored-dialog textarea { min-height: 160px; font-family: ui-monospace, monospace; }
 .ignored-actions { display: flex; align-items: center; gap: 12px; }
+.field-hint { display: block; margin-top: 5px; font-size: 10px; font-weight: 600; color: #8292a1; }
