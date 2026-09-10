@@ -6,6 +6,14 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.30
+
+- Crear una búsqueda con espacios o tildes en el nombre ya no falla: el
+  identificador se arma solo a partir del nombre visible y se puede editar.
+- Una subasta que terminó y dejó de publicarse ya no marca la corrida como
+  parcial. Sus lotes se siguen conservando y caducan solos a las 48 horas; sólo
+  una caída implausible de inventario sigue avisando.
+
 ## 0.1.29
 
 - Recupera el espacio en disco que quedaba ocupado por los datos internos que se
