@@ -6,6 +6,14 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.29
+
+- Recupera el espacio en disco que quedaba ocupado por los datos internos que se
+  dejaron de guardar: en una base real, de 572 MB a 30 MB. Se hace al arrancar y
+  sólo cuando hay espacio real para recuperar.
+- El historial de corridas deja de arrastrar una copia completa de los resultados
+  por cada corrida, que era la respuesta más pesada que quedaba.
+
 ## 0.1.28
 
 - Los resultados guardados ya no incluyen una copia de la tabla interna de
