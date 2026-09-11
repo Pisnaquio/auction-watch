@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urljoin
@@ -78,6 +78,17 @@ def utc_datetime(value: Any, *, zone: str = "America/Montevideo") -> datetime | 
         return None
     if raw.endswith("Z"):
         raw = raw[:-1] + "+00:00"
+    # A bare date is an end-date, not a midnight closing time.  Treating it as
+    # 00:00 silently removed lots during the whole day their source still
+    # advertised them as open.  Keep it actionable through that local day;
+    # source adapters that have an exact time still preserve it below.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        try:
+            return datetime.combine(
+                datetime.fromisoformat(raw).date(), time.max, ZoneInfo(zone)
+            ).astimezone(UTC)
+        except ValueError:
+            return None
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
