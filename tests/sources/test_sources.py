@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from time import monotonic
@@ -29,11 +30,24 @@ from auction_watch.sources.castells import (
     MAX_WORKERS,
     REQUEST_TIMEOUT_SECONDS,
 )
+from auction_watch.sources.parsing import utc_datetime
 from auction_watch.sources.prado import PRODUCTS_API_URL as PRADO_PRODUCTS_URL
 from auction_watch.sources.todoremates import PRODUCTS_API_URL, REMATES_API_URL
 from auction_watch.sources.transport import HttpxTransport
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_date_only_closing_keeps_lot_active_until_the_end_of_that_local_day() -> None:
+    """A source date with no time must not expire its lots at midnight."""
+
+    assert utc_datetime("2026-09-15") == datetime(2026, 9, 16, 2, 59, 59, 999999, tzinfo=UTC)
+
+
+def test_timed_closing_preserves_the_source_hour() -> None:
+    assert utc_datetime("2026-09-15T20:44:00-03:00") == datetime(
+        2026, 9, 15, 23, 44, tzinfo=UTC
+    )
 
 
 class FakeResponse:

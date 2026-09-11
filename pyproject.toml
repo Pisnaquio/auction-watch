@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auction-watch"
-version = "0.1.30"
+version = "0.1.31"
 description = "A generic, profile-driven auction monitor."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

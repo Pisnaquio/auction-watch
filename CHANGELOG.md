@@ -6,6 +6,13 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.31
+
+- Los remates de Castells que informan sólo la fecha de cierre ya no se
+  descartan a medianoche: siguen disponibles hasta el final de ese día. Evita
+  perder lotes que Castells mantiene abiertos hasta la noche, como la Atari 2600
+  del remate Vintage.
+
 ## 0.1.30
 
 - Crear una búsqueda con espacios o tildes en el nombre ya no falla: el
