@@ -116,7 +116,7 @@ class Database:
             from auction_watch.persistence.migrations import alembic_head
 
             with self.engine.connect() as connection:
-                result = connection.execute(text("SELECT 1")).scalar_one()
+                result: int = connection.execute(text("SELECT 1")).scalar_one()
                 revision = connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one_or_none()
