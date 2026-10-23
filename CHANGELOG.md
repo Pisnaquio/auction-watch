@@ -6,6 +6,18 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.32
+
+- El correo de novedades ahora muestra las subastas, no sólo cuántas hay. Cada
+  lote va con su foto, el rematador, el precio, cuándo cierra y las palabras por
+  las que coincidió, agrupados por día de cierre y con los que cierran antes
+  arriba, igual que en la app. Antes decía "3 oportunidades nuevas" y había que
+  abrir la app para saber si alguna importaba.
+- Los lotes que dejaron de aparecer en la búsqueda se agrupan al final y dicen
+  cuándo cerraban, en vez de anunciar un cierre que ya no existe.
+- Cuando hay más de 25 lotes, el correo muestra los primeros y avisa cuántos
+  quedan en la app, para que siga siendo legible.
+
 ## 0.1.31
 
 - Los remates de Castells que informan sólo la fecha de cierre ya no se

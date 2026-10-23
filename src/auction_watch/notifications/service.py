@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from auction_watch.async_ops import NotificationRepository
+from auction_watch.notifications.rendering import render_matches_notification
 from auction_watch.persistence.contracts import NotificationOutboxRecord
 from auction_watch.persistence.repository import StoredProfile
 from auction_watch.runner import RunOutcome
@@ -34,9 +35,16 @@ def _matches(payload: object, profile_id: str) -> list[dict[str, Any]]:
 class NotificationPlanner:
     """Turn a completed run into at most one logical outbox item."""
 
-    def __init__(self, repository: NotificationRepository, *, enabled: bool) -> None:
+    def __init__(
+        self,
+        repository: NotificationRepository,
+        *,
+        enabled: bool,
+        timezone: str = "UTC",
+    ) -> None:
         self.repository = repository
         self.enabled = enabled
+        self.timezone = timezone
 
     def plan(
         self,
@@ -60,14 +68,16 @@ class NotificationPlanner:
                 profile.profile.id,
             )
             previous_by_key = {item.get("opportunity_key"): item for item in previous}
-            changed_matches = [
-                item
-                for item in current_matches
-                if item.get("opportunity_key") not in previous_by_key
-                or item.get("score") != previous_by_key[item.get("opportunity_key")].get("score")
-                or item.get("matched_terms")
-                != previous_by_key[item.get("opportunity_key")].get("matched_terms")
-            ]
+            # The copies carry why each lot is here, so the mail can say "nuevo"
+            # or "con cambios" instead of leaving the reader to guess.
+            for candidate in current_matches:
+                seen = previous_by_key.get(candidate.get("opportunity_key"))
+                if seen is None:
+                    changed_matches.append({**candidate, "change": "new"})
+                elif candidate.get("score") != seen.get("score") or candidate.get(
+                    "matched_terms"
+                ) != seen.get("matched_terms"):
+                    changed_matches.append({**candidate, "change": "changed"})
             if getattr(snapshot, "status", "completed") == "completed":
                 current_keys = {item.get("opportunity_key") for item in current_matches}
                 changed_matches.extend(
@@ -103,24 +113,32 @@ class NotificationPlanner:
         elif not changed_matches:
             return None
         else:
+            rendered = render_matches_notification(
+                profile_name=profile.profile.name,
+                matches=changed_matches,
+                generated_at=now,
+                timezone=self.timezone,
+            )
             payload = {
                 "reason": "new_or_changed_matches",
                 "count": len(changed_matches),
+                "body_html": rendered.html,
                 "opportunities": [
                     {
                         "opportunity_key": item.get("opportunity_key"),
                         "score": item.get("score"),
+                        "change": item.get("change", "new"),
                         "title": (item.get("lot") or {}).get("title"),
                         "url": (item.get("lot") or {}).get("lot_url"),
+                        "source_id": (item.get("lot") or {}).get("source_id"),
+                        "price_label": (item.get("lot") or {}).get("price_label"),
+                        "closing_at": (item.get("lot") or {}).get("closing_at"),
                     }
                     for item in changed_matches
                 ],
             }
-            body = (
-                f"{len(changed_matches)} oportunidad(es) nueva(s) o modificada(s) "
-                f"en {profile.profile.name}."
-            )
-            subject = f"Auction Watch: novedades en {profile.profile.name}"
+            body = rendered.text
+            subject = rendered.subject
         item = NotificationOutboxRecord(
             dedupe_key=f"run:{outcome.run_id}:profile:{profile.profile.id}:channel:smtp",
             channel="smtp",
