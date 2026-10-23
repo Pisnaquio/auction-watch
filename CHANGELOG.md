@@ -6,6 +6,17 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.33
+
+- Los lotes de Remotes vuelven a tener fecha de cierre. El feed nunca trajo el
+  campo que leíamos, pero sí publica la hora del remate en otro: todos los lotes
+  llegaban sin cierre, así que el correo no podía ordenarlos ni agruparlos por
+  día, y un remate que ya pasó seguía contando como oportunidad.
+- Los lotes de Remotes ahora muestran precio. El feed no lo trae; se lee de la
+  página del remate, de a uno y espaciado, empezando por los que cierran antes,
+  porque el sitio rechaza las ráfagas. Un lote sin ofertas sigue sin precio, y
+  si la página falla el lote queda sin precio sin marcar la corrida como parcial.
+
 ## 0.1.32
 
 - El correo de novedades ahora muestra las subastas, no sólo cuántas hay. Cada

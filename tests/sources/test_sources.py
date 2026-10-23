@@ -32,6 +32,7 @@ from auction_watch.sources.castells import (
 )
 from auction_watch.sources.parsing import utc_datetime
 from auction_watch.sources.prado import PRODUCTS_API_URL as PRADO_PRODUCTS_URL
+from auction_watch.sources.remotes import parse_lot_prices
 from auction_watch.sources.todoremates import PRODUCTS_API_URL, REMATES_API_URL
 from auction_watch.sources.transport import HttpxTransport
 
@@ -842,6 +843,159 @@ def test_remotes_json_is_rejected_and_missing_lot_id_is_partial() -> None:
     result = RemotesSource(FakeTransport(lambda _url: FakeResponse(text=malformed))).scan()
     assert result.discovery_status == "partial"
     assert result.inventory_authoritative is False
+
+
+REMOTES_FEED_URL = "https://www.remotes.com.uy/feed/publicados"
+REMOTES_AUCTION_URL = "https://www.remotes.com.uy/participar/remate/7544"
+REMOTES_CLOSING = datetime.fromtimestamp(1786222800, tz=UTC)
+
+
+def remotes_handler(url: str) -> FakeResponse:
+    if url == REMOTES_FEED_URL:
+        return FakeResponse(text=load_text("remotes_feed.xml"))
+    if url == REMOTES_AUCTION_URL:
+        return FakeResponse(text=load_text("remotes_auction.html"))
+    raise AssertionError(url)
+
+
+def remotes_feed(*remate_ids: int) -> str:
+    items = "".join(
+        f"<item><title>Remate {remate_id}</title>"
+        f"<link>https://www.remotes.com.uy/participar/remate/{remate_id}</link>"
+        f"<fecha>{1786222800 + index}</fecha><cantLotes>1</cantLotes>"
+        f"<lotes><lote><title>Lote {remate_id}</title><link>?lote=1</link></lote></lotes></item>"
+        for index, remate_id in enumerate(remate_ids)
+    )
+    return f"<rss><channel>{items}</channel></rss>"
+
+
+def test_remotes_takes_the_closing_time_from_the_feed_date() -> None:
+    """The feed has no <cierre>: its <fecha> stamp is when the auction closes."""
+
+    transport = FakeTransport(remotes_handler)
+    result = RemotesSource(transport).scan()
+
+    assert result.groups[0].closing_at == REMOTES_CLOSING
+    assert [lot.closing_at for lot in result.lots] == [REMOTES_CLOSING, REMOTES_CLOSING]
+    assert transport.calls.count((REMOTES_AUCTION_URL, 20.0)) == 1
+
+
+def test_remotes_prices_lots_from_the_auction_page_offers() -> None:
+    result = RemotesSource(FakeTransport(remotes_handler)).scan()
+
+    priced = {
+        lot.lot_id: (lot.price_value, lot.price_currency, lot.price_label)
+        for lot in result.lots
+    }
+    assert priced["16"] == (Decimal("1250.5"), "UYU", "$ 1.250,50")
+    # The offer for lot 18 carries no url, so the sku is what identifies it.
+    assert priced["18"] == (Decimal("300"), "USD", "USD 300")
+    assert result.discovery_status == "complete"
+    assert result.warnings == ()
+
+
+def test_remotes_keeps_an_explicit_closing_element_over_the_feed_date() -> None:
+    document = (
+        "<rss><channel><item><title>A</title>"
+        "<link>https://www.remotes.com.uy/participar/remate/9</link>"
+        "<cierre>2026-09-15T20:44:00-03:00</cierre><fecha>1786222800</fecha>"
+        "<cantLotes>1</cantLotes><lotes><lote><title>Lote</title>"
+        "<link>?lote=1</link></lote></lotes></item></channel></rss>"
+    )
+    result = RemotesSource(FakeTransport(lambda _url: FakeResponse(text=document))).scan()
+
+    assert result.groups[0].closing_at == datetime(2026, 9, 15, 23, 44, tzinfo=UTC)
+
+
+def test_remotes_survives_an_auction_page_that_fails() -> None:
+    """Losing a price must not cost the lot, nor call a complete scan partial."""
+
+    def handler(url: str) -> FakeResponse:
+        if url == REMOTES_FEED_URL:
+            return FakeResponse(text=load_text("remotes_feed.xml"))
+        raise TimeoutError("fixture timeout")
+
+    result = RemotesSource(FakeTransport(handler)).scan()
+
+    assert [lot.lot_id for lot in result.lots] == ["16", "18"]
+    assert all(lot.price_value is None and lot.price_label == "" for lot in result.lots)
+    assert result.discovery_status == "complete"
+    assert result.inventory_authoritative is True
+    assert result.errors == ()
+    assert result.warnings == ("Remotes group 7544: price lookup failed (TimeoutError)",)
+
+
+def test_remotes_prices_the_auctions_closing_soonest_and_paces_the_requests() -> None:
+    """Remotes answers 429 to a burst, so the budget is small and spaced out."""
+
+    pauses: list[float] = []
+    transport = FakeTransport(
+        lambda url: FakeResponse(
+            text=remotes_feed(10, 11, 12) if url == REMOTES_FEED_URL else "<html></html>"
+        )
+    )
+    result = RemotesSource(
+        transport,
+        max_price_requests=2,
+        sleep=pauses.append,
+    ).scan()
+
+    fetched = [url for url, _timeout in transport.calls if url != REMOTES_FEED_URL]
+    assert fetched == [
+        "https://www.remotes.com.uy/participar/remate/10",
+        "https://www.remotes.com.uy/participar/remate/11",
+    ]
+    assert pauses == [3.0]
+    assert result.warnings == ()
+
+
+def test_remotes_stops_pricing_when_the_pace_no_longer_fits_the_deadline() -> None:
+    ticks = iter([0.0, 1.0, 9.0])
+    transport = FakeTransport(
+        lambda url: FakeResponse(
+            text=remotes_feed(10, 11) if url == REMOTES_FEED_URL else "<html></html>"
+        )
+    )
+    result = RemotesSource(
+        transport,
+        price_deadline_seconds=10.0,
+        clock=lambda: next(ticks, 9.0),
+        sleep=lambda _seconds: None,
+    ).scan()
+
+    fetched = [url for url, _timeout in transport.calls if url != REMOTES_FEED_URL]
+    assert fetched == ["https://www.remotes.com.uy/participar/remate/10"]
+    assert result.warnings == ("Remotes: price lookup ran out of time",)
+    assert result.discovery_status == "complete"
+
+
+def test_remotes_stops_pricing_after_repeated_refusals() -> None:
+    def handler(url: str) -> FakeResponse:
+        if url == REMOTES_FEED_URL:
+            return FakeResponse(text=remotes_feed(10, 11, 12))
+        raise httpx.HTTPStatusError(
+            "429", request=httpx.Request("GET", url), response=httpx.Response(429)
+        )
+
+    transport = FakeTransport(handler)
+    result = RemotesSource(transport, sleep=lambda _seconds: None).scan()
+
+    fetched = [url for url, _timeout in transport.calls if url != REMOTES_FEED_URL]
+    assert len(fetched) == 2
+    assert result.warnings[-1] == "Remotes: stopped pricing after repeated refusals"
+    assert result.discovery_status == "complete"
+    assert all(lot.price_value is None for lot in result.lots)
+
+
+def test_remotes_price_parsing_ignores_lots_without_a_real_offer() -> None:
+    prices = parse_lot_prices(load_text("remotes_auction.html"))
+    assert set(prices) == {"16", "18"}
+
+    assert parse_lot_prices("<html><body>sin json-ld</body></html>") == {}
+    assert parse_lot_prices(
+        '<script type="application/ld+json">{"@type":"Product","sku":"LOTE-1-2",'
+        '"offers":{"@type":"Offer","price":0,"priceCurrency":"UYU"}}</script>'
+    ) == {}
 
 
 def test_todoremates_uses_real_wordpress_and_woocommerce_pagination() -> None:
