@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,6 +12,10 @@ from auction_watch.notifications.rendering import render_matches_notification
 from auction_watch.persistence.contracts import NotificationOutboxRecord
 from auction_watch.persistence.repository import StoredProfile
 from auction_watch.runner import RunOutcome
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _sanitize_error(value: str) -> str:
@@ -41,10 +46,12 @@ class NotificationPlanner:
         *,
         enabled: bool,
         timezone: str = "UTC",
+        now: Callable[[], datetime] = _now,
     ) -> None:
         self.repository = repository
         self.enabled = enabled
         self.timezone = timezone
+        self.now = now
 
     def plan(
         self,
@@ -57,7 +64,7 @@ class NotificationPlanner:
         mode = profile.profile.notification_mode
         if mode == "disabled" or not self.enabled:
             return None
-        now = datetime.now(UTC)
+        now = self.now()
         notification_type = "failure"
         current_matches: list[dict[str, Any]] = []
         changed_matches: list[dict[str, Any]] = []
