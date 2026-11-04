@@ -13,6 +13,13 @@ available. The Home Assistant add-on packaging is documented in
 [docs/addon.md](docs/addon.md); it is an independent ingress application and
 does not depend on Consolas.
 
+## Instalación
+
+Para instalarlo en Home Assistant, seguí
+[docs/INSTALL.md](docs/INSTALL.md): agregar el repositorio de add-ons,
+configurar, crear perfiles y actualizar. Incluye también cómo correrlo con
+Docker si no tenés Supervisor.
+
 ## Local development
 
 Requirements: Python 3.12 and Node.js 22 or newer.
