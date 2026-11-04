@@ -189,7 +189,9 @@ def test_the_delivered_mail_carries_the_rendered_html(tmp_path: Path) -> None:
             "snap-1", "run-1", "hash", "completed", payload, published_at=NOW
         )
         notifications = NotificationRepository(db)
-        planner = NotificationPlanner(notifications, enabled=True, timezone=ZONE)
+        planner = NotificationPlanner(
+            notifications, enabled=True, timezone=ZONE, now=lambda: NOW
+        )
 
         record = planner.plan(
             stored,
