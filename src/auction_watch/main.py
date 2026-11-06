@@ -109,6 +109,7 @@ def create_app(
                     enabled=bool(
                         runtime_settings.smtp_enabled and runtime_settings.smtp_recipient
                     ),
+                    timezone=runtime_settings.timezone,
                 )
                 schedule_once = None
                 if runtime_settings.scheduler_enabled:

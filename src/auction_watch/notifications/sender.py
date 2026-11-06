@@ -13,6 +13,7 @@ from typing import Protocol
 class NotificationMessage:
     subject: str
     body: str
+    html: str | None = None
 
 
 class NotificationSender(Protocol):
@@ -22,7 +23,11 @@ class NotificationSender(Protocol):
 
 
 class SMTPNotificationSender:
-    """Send plain-text messages using SMTP configuration supplied at runtime."""
+    """Send messages using SMTP configuration supplied at runtime.
+
+    The plain-text body is always the one the message carries; an HTML body is
+    added as an alternative, so a client that refuses HTML still shows the lots.
+    """
 
     def __init__(
         self,
@@ -53,6 +58,8 @@ class SMTPNotificationSender:
         mail["To"] = self.recipient
         mail["Subject"] = message.subject
         mail.set_content(message.body)
+        if message.html:
+            mail.add_alternative(message.html, subtype="html")
         with smtplib.SMTP(self.host, self.port, timeout=10) as connection:
             connection.starttls(context=ssl.create_default_context())
             if self.username:

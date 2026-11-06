@@ -130,6 +130,11 @@ class NotificationDeliveryWorker:
                 NotificationMessage(
                     subject=str(payload.get("subject", "Auction Watch")),
                     body=str(payload.get("body", "Auction Watch notification")),
+                    html=(
+                        str(payload["body_html"])
+                        if isinstance(payload.get("body_html"), str)
+                        else None
+                    ),
                 )
             )
         except Exception as exc:
