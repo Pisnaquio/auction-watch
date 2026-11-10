@@ -1,14 +1,44 @@
+# Dependabot: checks dependencies once a week and opens PRs.
+# Minor and patch bumps are grouped into one PR per ecosystem; majors arrive
+# separately. Security PRs do not count against the limit.
 version: 2
 updates:
+  # Workflows pinned by commit SHA.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      github-actions-minor-patch:
+        update-types: [minor, patch]
+
+  # Backend (pyproject.toml).
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+
+  # Frontend.
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  # Frontend build stage image in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      docker-minor-patch:
+        update-types: [minor, patch]
