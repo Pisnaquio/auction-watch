@@ -1,6 +1,6 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/base-python:3.12-alpine3.24
 
-FROM node:22-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts
