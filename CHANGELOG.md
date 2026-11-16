@@ -6,6 +6,11 @@ El proceso de publicación, actualización y verificación del add-on está en
 [docs/RELEASE.md](docs/RELEASE.md). El estado vivo debe consultarse en el
 Supervisor; no se mantiene aquí porque cambia entre releases.
 
+## 0.1.34
+
+- La interfaz pasa a React 19, Vite 8 y TypeScript 7. Es mantenimiento: no
+  cambia lo que se ve ni cómo se usa.
+
 ## 0.1.33
 
 - Los lotes de Remotes vuelven a tener fecha de cierre. El feed nunca trajo el
